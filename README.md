@@ -36,3 +36,7 @@ Current version: **1.0.0**
 
 Discord: `Eclipsa1234`
 ign: collector1234
+
+## Installation
+
+[![Install Marklister](https://img.shields.io/badge/Install-Marklister-blue?style=for-the-badge)](https://raw.githubusercontent.com/Collector4210/Marklister/refs/heads/main/marklister.user.js)
