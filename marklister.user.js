@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Marklister for florr.io
 // @namespace    marklister.florr.public
-// @version      1.0.3
+// @version      1.0.4
 // @updateURL    https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
 // @downloadURL  https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
-// @description  Public Marklister for florr.io with persistent UI state, adaptive low-load tracking, duplicate-safe add, cloud sync, and locked self identity.
+// @description  Public Marklister for florr.io with server-managed Bug Words, persistent UI state, adaptive low-load tracking, duplicate-safe add, cloud sync, and locked self identity.
 // @match        https://florr.io/*
 // @match        https://*.florr.io/*
 // @run-at       document-start
@@ -21,10 +21,11 @@
 (() => {
 'use strict';
 const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-const VERSION = '1.0.3';
+const VERSION = '1.0.4';
 const DEFAULT_SERVER_URL = 'https://marklister-server.starcofan.workers.dev';
 const CLIENT_TOKEN_KEY = 'marklister_client_token_v1';
 const UI_STATE_KEY = 'marklister_ui_state_v1';
+const BUG_WORDS_CACHE_KEY = 'marklister_bug_words_cache_v1';
 
 const SAVED_UI = (() => {
   try {
@@ -63,6 +64,8 @@ const S = {
     selfHud: null, lastEventKey: '', lastEventAt: 0, topLeftRecent: []
   },
   list: [], listMap: new Map(),
+  bugWords: new Set((()=>{try{const cached=GM_getValue(BUG_WORDS_CACHE_KEY,[]);return Array.isArray(cached)?cached.map(v=>String(v||'').trim().toLowerCase()).filter(Boolean):[]}catch{return []}})()),
+  bugWordsReady: false,
   uiMode: ['full','compact','tiny'].includes(SAVED_UI.uiMode) ? SAVED_UI.uiMode : 'compact',
   restoreUiMode: ['full','compact'].includes(SAVED_UI.restoreUiMode)
     ? SAVED_UI.restoreUiMode
@@ -171,6 +174,11 @@ function refreshActivity(restartOverlay=true){
   scheduleForegroundSync();
 }
 
+function normalizeBugWord(text){return String(text||'').trim().toLowerCase()}
+function isBugWord(text){const key=normalizeBugWord(text);return !!key&&S.bugWords.has(key)}
+function setBugWords(words){const normalized=[...new Set((Array.isArray(words)?words:[]).map(normalizeBugWord).filter(Boolean))];S.bugWords=new Set(normalized);try{GM_setValue(BUG_WORDS_CACHE_KEY,normalized)}catch{}if(S.ownerName&&isBugWord(S.ownerName)){S.ownerName='';S.ownerConfirmed=false;S.ownerCandidate=null;S.selfHud=null;S.labelCapture.selfHud=null;S.list=[];S.listMap.clear();S.lastSyncAt=0}}
+async function refreshBugWords(){const timer=setTimeout(()=>{S.bugWordsReady=true;refreshSelfHudFromTopLeftRecent()},2500);try{const d=await api('/api/bug-words');setBugWords(d?.words||[])}catch(e){console.warn('[Marklister] Bug Words sync failed; using cached list',e)}finally{clearTimeout(timer);S.bugWordsReady=true;refreshSelfHudFromTopLeftRecent()}}
+
 function textLooksLikeRarity(text){
   const t=String(text||'').trim().toLowerCase();
   return ['common','unusual','rare','epic','legendary','mythic','ultra','super','eternal','unique'].includes(t);
@@ -188,7 +196,7 @@ function textLooksLikeUiNoise(text){
 }
 function looksLikeGuildTag(text){return /^\[[^\[\]\n]{1,24}\]$/.test(String(text||'').trim())}
 function fontPx(font){const m=/(\d+(?:\.\d+)?)px/i.exec(String(font||''));return m?Number(m[1]):0}
-function validSelfUsername(text){const t=String(text||'').trim();return /^[A-Za-z0-9_#.!'`~+\-=]{2,32}$/.test(t)&&!textLooksLikeUiNoise(t)}
+function validSelfUsername(text){const t=String(text||'').trim();return /^[A-Za-z0-9_#.!'`~+\-=]{2,32}$/.test(t)&&!textLooksLikeUiNoise(t)&&!isBugWord(t)}
 function inSelfHudLevelZone(p){const maxX=Math.min(440,innerWidth*.34),maxY=Math.min(230,innerHeight*.30);return p.x>=45&&p.x<=maxX&&p.y>=55&&p.y<=maxY}
 function inSelfHudNameZone(p){const maxX=Math.min(440,innerWidth*.34),maxY=Math.min(195,innerHeight*.27);return p.x>=45&&p.x<=maxX&&p.y>=25&&p.y<=maxY}
 function inSelfHudBroadZone(p){const maxX=Math.min(470,innerWidth*.36),maxY=Math.min(245,innerHeight*.32);return p.x>=35&&p.x<=maxX&&p.y>=18&&p.y<=maxY}
@@ -224,6 +232,8 @@ function refreshSelfHudFromTopLeftRecent(){
     }
   }
   if(!best)return cap.selfHud;
+  if(isBugWord(best.username)){S.ownerCandidate=null;return cap.selfHud}
+  if(!S.bugWordsReady)return cap.selfHud;
 
   // Never create a server user from a single transient world label.  The same
   // fixed HUD pair must win repeatedly before an owner is accepted.
@@ -343,7 +353,7 @@ function recordCanvasText(ctx,args){
   }
 
   const username=String(usernameEntry.text||'').trim(),guild=guildEntry?.text||null;
-  if(!username||username.length>80||!/[A-Za-z0-9_\-]/.test(username))return;
+  if(!username||username.length>80||!/[A-Za-z0-9_\-]/.test(username)||isBugWord(username))return;
   if(!S.selectionMode&&S.ownerConfirmed&&!S.listMap.has(username.toLowerCase()))return;
   const userDx=Math.abs(usernameEntry.clientX-entry.clientX),userDy=entry.clientY-usernameEntry.clientY;
   if(userDx>120||userDy<1.5||userDy>28)return;
@@ -494,7 +504,7 @@ const MarklisterWasmImports={
       const texts=S.hitboxBridge.texts.get(healthBar);if(!texts||texts.length<2)return;
       const levelText=String(texts[texts.length-1]||'').trim();
       const lm=/^Lvl\.?\s*[:#]?\s*(\d+)$/i.exec(levelText);if(!lm)return;
-      const username=String(texts[0]||'').trim();if(!username||textLooksLikeUiNoise(username)||looksLikeGuildTag(username))return;
+      const username=String(texts[0]||'').trim();if(!username||textLooksLikeUiNoise(username)||looksLikeGuildTag(username)||isBugWord(username))return;
       if(!S.selectionMode&&!S.listMap.has(username.toLowerCase()))return;
       const guild=texts.length>=3?String(texts[1]||'').trim():null;
       const pos=hbU32(M,object2,V.pos);if(!pos)return;
@@ -598,6 +608,7 @@ async function ensureOwnerReady(timeoutMs=1800){const start=performance.now();wh
 async function addMark(name,reason){
   name=String(name||'').trim();
   if(!name)return alert('Type a user name.');
+  if(isBugWord(name))return alert(name+' is in the Bug Words list and cannot be added as a player.');
   if(S.addBusy)return;
 
   const key=name.toLowerCase();
@@ -812,6 +823,6 @@ async function openDeveloperMode(){
 }
 function registerMenu(){GM_registerMenuCommand('Marklister: 새로고침',()=>bootstrap(true));GM_registerMenuCommand('Marklister: 사용자 인식 초기화',()=>{GM_setValue('marklister_owner','');S.ownerName='';S.ownerConfirmed=false;S.selfHud=null;S.labelCapture.selfHud=null;S.ownerCandidate=null;alert('Owner lock cleared. Reload florr.io.');});GM_registerMenuCommand('Marklister: 개발자 모드',openDeveloperMode);GM_registerMenuCommand('Marklister: 개발자 페이지',()=>{const u=DEFAULT_SERVER_URL+'/admin';if(typeof GM_openInTab==='function')GM_openInTab(u,{active:true,insert:true});else window.open(u,'_blank')})}
 
-function start(){installFlorrkitHitboxBridge();createUI();installInputShield();installCanvasCapture();installKeys();registerMenu();refreshActivity(true)}
+function start(){installFlorrkitHitboxBridge();createUI();installInputShield();installCanvasCapture();installKeys();registerMenu();refreshBugWords();refreshActivity(true)}
 start();
 })();
