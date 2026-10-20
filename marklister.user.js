@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Marklister for florr.io
 // @namespace    marklister.florr.public
-// @version      1.0.4
+// @version      1.5.0
 // @updateURL    https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
 // @downloadURL  https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
-// @description  Public Marklister for florr.io with server-managed Bug Words, persistent UI state, adaptive low-load tracking, duplicate-safe add, cloud sync, and locked self identity.
+// @description  Marklister v1.5 test: multiple custom lists, list colors, move, persistent display selection, safer UI cancellation, error reports, Bug Words, and low-load tracking.
 // @match        https://florr.io/*
 // @match        https://*.florr.io/*
 // @run-at       document-start
@@ -21,10 +21,13 @@
 (() => {
 'use strict';
 const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-const VERSION = '1.0.4';
+const VERSION = '1.5.0';
 const DEFAULT_SERVER_URL = 'https://marklister-server.starcofan.workers.dev';
 const CLIENT_TOKEN_KEY = 'marklister_client_token_v1';
 const UI_STATE_KEY = 'marklister_ui_state_v1';
+const V15_STATE_KEY = 'marklister_v15_state_v1';
+const DEFAULT_LIST_COLOR = '#ff1a1a';
+const V15_SAVED = (()=>{try{const v=GM_getValue(V15_STATE_KEY,{});return v&&typeof v==='object'?v:{}}catch{return {}}})();
 const BUG_WORDS_CACHE_KEY = 'marklister_bug_words_cache_v1';
 
 const SAVED_UI = (() => {
@@ -64,6 +67,11 @@ const S = {
     selfHud: null, lastEventKey: '', lastEventAt: 0, topLeftRecent: []
   },
   list: [], listMap: new Map(),
+  lists: [], entries: [],
+  displayAll: !!V15_SAVED.displayAll,
+  displayedListIds: new Set(Array.isArray(V15_SAVED.displayedListIds)?V15_SAVED.displayedListIds.map(Number).filter(Number.isFinite):[]),
+  sideMode: null, selectedListId: null, addListId: null,
+  errorOpen: false, nameDetectStartedAt: Date.now(), bugRejectCount: 0, nameDetectErrorShown: false,
   bugWords: new Set((()=>{try{const cached=GM_getValue(BUG_WORDS_CACHE_KEY,[]);return Array.isArray(cached)?cached.map(v=>String(v||'').trim().toLowerCase()).filter(Boolean):[]}catch{return []}})()),
   bugWordsReady: false,
   uiMode: ['full','compact','tiny'].includes(SAVED_UI.uiMode) ? SAVED_UI.uiMode : 'compact',
@@ -101,10 +109,27 @@ const CSS = `
 .ml-listpanel{position:absolute;right:calc(100% + 7px);top:20px;width:245px;min-height:300px;max-height:440px;border-radius:9px;padding:10px 8px 8px;overflow:auto}.ml-list-handle{width:48px;height:4px;background:#504d4e;border-radius:2px;margin:0 auto 10px}.ml-entry{background:#918c8e;border-radius:4px;padding:7px 40px 7px 8px;margin:7px 0;position:relative;min-height:42px}.ml-entry-name{font-size:16px;font-weight:800}.ml-entry-reason{font-size:13px;font-weight:700;color:#ddd;margin-top:2px}.ml-entry-actions{position:absolute;right:5px;top:5px;display:flex;flex-direction:column;gap:2px}.ml-entry-actions button{width:25px;height:22px;border:0;background:transparent;color:#111;font-size:17px;cursor:pointer;padding:0}
 .ml-modal-bg{position:fixed;inset:0;z-index:1000002;background:transparent;display:flex;align-items:center;justify-content:center}.ml-modal{min-width:340px;max-width:510px;background:#777174;border:3px solid #3d3b3d;border-radius:9px;padding:10px;box-shadow:0 6px 18px rgba(0,0,0,.32)}.ml-modal-title{text-align:center;font-size:23px;font-weight:900;margin-bottom:9px}.ml-choices{display:flex;gap:18px}.ml-choice{flex:1;height:78px;border:0;border-radius:4px;background:#8d888a;color:#e6e2e3;font-size:20px;font-weight:900;cursor:pointer}.ml-field-label{font-size:15px;font-weight:800;margin:1px 0 2px}.ml-row{display:flex;gap:7px}.ml-input,.ml-textarea{width:100%;box-sizing:border-box;border:0;border-radius:2px;background:#8d888a;color:#fff;font-size:18px;font-weight:700;padding:7px 8px;outline:none}.ml-textarea{height:52px;resize:none}.ml-addbtn{width:66px;border:0;border-radius:2px;background:#8d888a;color:#fff;font-size:18px;font-weight:900;cursor:pointer}.ml-sp{height:6px}.ml-cancel{margin-top:7px;border:0;border-radius:3px;background:#625e60;color:#ddd;padding:6px 10px;cursor:pointer}
 #ml-overlay{position:fixed;inset:0;z-index:999999;pointer-events:none}.ml-ring{position:fixed;border-radius:50%;transform:translate(-50%,-50%);box-sizing:border-box;pointer-events:none}.ml-ring.blue{background:rgba(78,153,229,.16);border:3px solid rgba(78,153,229,.72)}.ml-ring.red{background:rgba(255,84,47,.30);border:3px solid rgba(236,79,50,.66)}.ml-hit-target{position:fixed;transform:translate(-50%,-50%);border-radius:50%;pointer-events:auto;cursor:pointer;background:transparent}.ml-hint{position:fixed;left:50%;top:30px;transform:translateX(-50%);background:rgba(0,70,45,.86);border-radius:6px;padding:6px 15px;color:#fff;font-size:24px;font-weight:900;pointer-events:none}.ml-line{position:fixed;height:2px;background:#d64236;transform-origin:left center;pointer-events:none}.ml-badge{position:fixed;background:#d24c40;color:#fff;border-radius:2px;padding:2px 6px 4px;min-width:78px;font-weight:900;pointer-events:none}.ml-badge .small{font-size:14px;line-height:1}.ml-badge .big{font-size:18px;line-height:1.1}.ml-target-name{position:fixed;transform:translate(-50%,-100%);padding:2px 6px;background:rgba(73,142,210,.88);border:1px solid rgba(36,91,145,.85);border-radius:3px;color:#0b1d2c;font-size:15px;font-weight:900;line-height:1.15;white-space:nowrap;pointer-events:none;text-shadow:none}
+.ml-side-row{display:flex;align-items:center;gap:8px;background:#918c8e;border-radius:4px;padding:8px;margin:7px 0;font-size:18px;font-weight:900}.ml-side-row .grow{flex:1}.ml-color-box{width:27px;height:27px;border:3px solid #494647;display:inline-block;flex:0 0 auto;cursor:pointer}.ml-color-box.locked{cursor:not-allowed}.ml-side-icon{width:25px;height:25px;border:0;background:transparent;font-size:18px;cursor:pointer;padding:0}.ml-list-title{display:flex;align-items:center;justify-content:center;gap:9px;font-size:22px;font-weight:900;margin:3px 0 8px}.ml-check{width:24px;height:24px;border:3px solid #514e4f;background:transparent;display:flex;align-items:center;justify-content:center;font-size:18px}.ml-check.on::after{content:'✓';font-weight:900;color:#fff}.ml-list-selectors{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px;min-height:38px}.ml-list-swatch-wrap{position:relative;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%}.ml-list-swatch-wrap.selected{outline:4px solid #ff1717;outline-offset:2px}.ml-list-swatch{width:25px;height:25px;border:3px solid #494647;cursor:pointer}.ml-list-tooltip{position:absolute;bottom:34px;left:50%;transform:translateX(-50%);display:none;background:#aaa6a8;color:#fff;padding:3px 8px;border-radius:3px;font-weight:900;white-space:nowrap}.ml-list-swatch-wrap:hover .ml-list-tooltip{display:block}.ml-move-popup{position:absolute;z-index:4;left:50%;top:50%;transform:translate(-50%,-50%);background:#777174;border:3px solid #3d3b3d;border-radius:8px;padding:10px;min-width:245px;box-shadow:0 6px 18px rgba(0,0,0,.3)}.ml-move-row{display:flex;align-items:center;gap:10px;background:#918c8e;border-radius:4px;padding:7px;margin:7px 0;font-weight:900;font-size:18px}.ml-move-row span{flex:1}.ml-error-bg{position:fixed;inset:0;z-index:1000010;background:rgba(0,0,0,.06);display:flex;align-items:center;justify-content:center}.ml-error-box{position:relative;width:min(500px,90vw);background:#777174;border:3px solid #3d3b3d;border-radius:10px;padding:16px;box-shadow:0 6px 18px rgba(0,0,0,.3);text-align:center}.ml-error-title{font-size:27px;font-weight:900}.ml-error-msg{font-size:18px;font-weight:800;margin:8px auto;max-width:410px}.ml-error-close{position:absolute;right:7px;top:7px;border:3px solid #3d3b3d;border-radius:6px;background:#999;color:red;font-size:22px;font-weight:900;line-height:1;padding:3px 6px}.ml-error-copy{position:absolute;right:24px;top:145px;border:2px solid #3d3b3d;border-radius:4px;background:#aaa6a8;width:24px;height:24px}.ml-error-copy::after{content:'Copy error code';position:absolute;right:-75px;top:27px;background:#aaa6a8;color:white;padding:3px 8px;border-radius:3px;white-space:nowrap;font-weight:900;display:none}.ml-error-copy:hover::after{display:block}.ml-error-code{margin-top:34px;background:#6a6668;border-radius:5px;min-height:95px;max-height:180px;overflow:auto;text-align:left;white-space:pre-wrap;word-break:break-word;padding:8px;color:#ddd;font:12px Consolas,monospace;user-select:text}.ml-palette-hidden{position:fixed;opacity:0;pointer-events:none;width:1px;height:1px}
+
 `;
 
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function eyeSvg(open){return open?'<svg viewBox="0 0 32 22"><path d="M2 11C6 3 12 1 16 1s10 2 14 10c-4 8-10 10-14 10S6 19 2 11Z"/><circle cx="16" cy="11" r="4" fill="#333" stroke="none"/></svg>':'<svg viewBox="0 0 32 22"><path d="M2 11C6 3 12 1 16 1s10 2 14 10c-4 8-10 10-14 10S6 19 2 11Z"/><path d="M3 2L29 20"/><circle cx="16" cy="11" r="4" fill="#333" stroke="none"/></svg>'}
+
+function saveV15State(){try{GM_setValue(V15_STATE_KEY,{displayAll:!!S.displayAll,displayedListIds:[...S.displayedListIds]})}catch{}}
+function defaultList(){return S.lists.find(x=>x.is_default)||S.lists[0]||null}
+function listById(id){return S.lists.find(x=>Number(x.id)===Number(id))||null}
+function randomUnusedColor(){const palette=['#ff1a1a','#13aee8','#fff119','#7ee842','#e865d9','#a470ff','#ff8c22','#25d7be','#f45d75','#67a6ff','#d0e64a','#ffba65'];const used=new Set(S.lists.map(x=>String(x.color||'').toLowerCase()));const free=palette.filter(x=>!used.has(x.toLowerCase())&&x.toLowerCase()!==DEFAULT_LIST_COLOR);return free.length?free[Math.floor(Math.random()*free.length)]:('#'+Math.floor(Math.random()*0xffffff).toString(16).padStart(6,'0'))}
+function rebuildDisplayMap(){const chosen=S.displayAll?new Set(S.lists.map(x=>Number(x.id))):S.displayedListIds;S.listMap=new Map();for(const e of S.entries){if(chosen.has(Number(e.list_id)))S.listMap.set(String(e.name||'').toLowerCase(),e)}S.list=[...S.listMap.values()];S.displayEnabled=S.listMap.size>0;saveV15State();refreshActivity(true)}
+function applyPayload(d){S.lists=Array.isArray(d.lists)?d.lists:[];S.entries=Array.isArray(d.entries)?d.entries:(Array.isArray(d.items)?d.items:[]);const valid=new Set(S.lists.map(x=>Number(x.id)));S.displayedListIds=new Set([...S.displayedListIds].filter(id=>valid.has(Number(id))));if(!S.displayAll&&S.displayedListIds.size===0){const def=defaultList();if(def)S.displayedListIds.add(Number(def.id))}if(!S.addListId||!valid.has(Number(S.addListId))){const def=defaultList();S.addListId=def?Number(def.id):null}rebuildDisplayMap();if(S.uiMode==='full'&&S.sideMode)renderSidePanel()}
+function selectedColorForName(name){const e=S.listMap.get(String(name||'').toLowerCase());return e?.list_color||listById(e?.list_id)?.color||DEFAULT_LIST_COLOR}
+function hexToRgba(hex,a){const m=/^#([0-9a-f]{6})$/i.exec(String(hex||''));if(!m)return `rgba(255,26,26,${a})`;const n=parseInt(m[1],16),r=(n>>16)&255,g=(n>>8)&255,b=n&255;return `rgba(${r},${g},${b},${a})`}
+function chooseColor(initial,onPick){const i=document.createElement('input');i.type='color';i.value=/^#[0-9a-f]{6}$/i.test(initial||'')?initial:'#13aee8';i.className='ml-palette-hidden';document.documentElement.appendChild(i);i.oninput=()=>{onPick(i.value);i.remove()};i.onchange=()=>{if(i.isConnected){onPick(i.value);i.remove()}};i.onblur=()=>setTimeout(()=>i.remove(),120);i.click()}
+function listSelectorHtml(selectedId){return '<div class="ml-list-selectors">'+S.lists.map(l=>`<div class="ml-list-swatch-wrap ${Number(l.id)===Number(selectedId)?'selected':''}" data-list-id="${l.id}"><div class="ml-list-tooltip">${esc(l.name)}</div><div class="ml-list-swatch" style="background:${esc(l.color)}"></div></div>`).join('')+'</div>'}
+function bindListSelectors(root,onChange){for(const el of root.querySelectorAll('.ml-list-swatch-wrap'))el.onclick=e=>{e.preventDefault();e.stopPropagation();const id=Number(el.dataset.listId);onChange(id);for(const x of root.querySelectorAll('.ml-list-swatch-wrap'))x.classList.toggle('selected',Number(x.dataset.listId)===id)}}
+function makeErrorCode(kind,message,extra={}){return ['Marklister Error Report','Version: '+VERSION,'Error: '+kind,'Message: '+String(message||''),'Owner: '+(S.ownerName||'(not detected)'),'Selection mode: '+S.selectionMode,'Bug reject count: '+S.bugRejectCount,'Timestamp: '+new Date().toISOString(),...Object.entries(extra).map(([k,v])=>k+': '+String(v))].join('\n')}
+function showError(kind,message,extra={}){try{if(S.errorOpen)return;S.errorOpen=true;const bg=document.createElement('div');bg.className='ml-error-bg';const code=makeErrorCode(kind,message,extra);bg.innerHTML=`<div class="ml-error-box"><button class="ml-error-close">✖</button><div class="ml-error-title">Your script has an error</div><div class="ml-error-msg">Oops, It seems there is an error in your script, Pls copy error code and report it to Discord: Eclipsa1234</div><button class="ml-error-copy" title="Copy error code">▣</button><pre class="ml-error-code"></pre></div>`;bg.querySelector('.ml-error-code').textContent=code;const close=()=>{bg.remove();S.errorOpen=false};bg.onclick=e=>{if(e.target===bg)close()};bg.querySelector('.ml-error-close').onclick=close;bg.querySelector('.ml-error-copy').onclick=async e=>{e.stopPropagation();try{await navigator.clipboard.writeText(code)}catch{const ta=document.createElement('textarea');ta.value=code;document.body.append(ta);ta.select();document.execCommand('copy');ta.remove()}};document.documentElement.appendChild(bg)}catch(err){console.error('[Marklister] error popup failed',err)}}
+function cancelCurrentTask(){if(S.selectionMode){S.selectionMode=false;S.selectedName=null;refreshActivity(true)}if(S.modal)closeModal();if(S.sideMode){S.sideMode=null;S.showList=false;renderUiState()}const err=document.querySelector('.ml-error-bg');if(err){err.remove();S.errorOpen=false}}
 
 function markedDisplayActive(){return !!(S.displayEnabled&&S.listMap.size)}
 function worldTrackingActive(){return !!(!S.ownerConfirmed||S.selectionMode||markedDisplayActive())}
@@ -231,8 +256,8 @@ function refreshSelfHudFromTopLeftRecent(){
       if(!best||score>best.score)best={score,username:ng.username,level:lg.level,nr,lr,nCount:ng.rows.length,lCount:lg.rows.length};
     }
   }
-  if(!best)return cap.selfHud;
-  if(isBugWord(best.username)){S.ownerCandidate=null;return cap.selfHud}
+  if(!best){if(!S.ownerConfirmed&&!S.nameDetectErrorShown&&Date.now()-S.nameDetectStartedAt>18000){S.nameDetectErrorShown=true;showError('SELF_NAME_DETECTION_FAILED','Could not detect a valid florr.io username after repeated attempts.')}return cap.selfHud;}
+  if(isBugWord(best.username)){S.bugRejectCount++;S.ownerCandidate=null;if(!S.nameDetectErrorShown&&S.bugRejectCount>=10){S.nameDetectErrorShown=true;showError('SELF_NAME_DETECTION_FAILED','Repeatedly detected only Bug Words.',{lastCandidate:best.username})}return cap.selfHud}
   if(!S.bugWordsReady)return cap.selfHud;
 
   // Never create a server user from a single transient world label.  The same
@@ -319,6 +344,10 @@ function recordCanvasText(ctx,args){
   if(cap.recent.length>120)cap.recent.splice(0,cap.recent.length-120);
 
   if(!S.ownerConfirmed&&client.x<520&&client.y<280){
+    if(isBugWord(text)&&inSelfHudNameZone(client)){
+      S.bugRejectCount++;
+      if(!S.nameDetectErrorShown&&S.bugRejectCount>=10){S.nameDetectErrorShown=true;showError('SELF_NAME_DETECTION_FAILED','Repeatedly detected only Bug Words.',{lastCandidate:text})}
+    }
     cap.topLeftRecent.push({text,x:client.x,y:client.y,t:Date.now(),font:String(ctx.font||''),fillStyle:String(ctx.fillStyle??'')});
     const tc=Date.now()-5000;
     cap.topLeftRecent=cap.topLeftRecent.filter(r=>r.t>=tc).slice(-120);
@@ -385,7 +414,7 @@ function installCanvasCapture(){
         if(!text)text=String(args?.[0]??'').trim();
         if(S.listMap.has(text.toLowerCase())){
           const oldFill=ctx.fillStyle;
-          try{ctx.fillStyle='#c81515';return Reflect.apply(target,ctx,args)}
+          try{ctx.fillStyle=selectedColorForName(text);return Reflect.apply(target,ctx,args)}
           finally{ctx.fillStyle=oldFill}
         }
       }
@@ -597,70 +626,30 @@ function gmRequest({method='GET',url,data=null,headers={}}){
   }))
 }
 async function api(path,method='GET',data=null,headers={}){return gmRequest({method,url:S.serverUrl.replace(/\/$/,'')+path,data,headers})}
-async function bootstrap(force=false){if(!S.ownerConfirmed||!S.ownerName)return;if(!force&&Date.now()-S.lastSyncAt<2500)return;S.lastSyncAt=Date.now();try{const d=await api('/api/bootstrap?user='+encodeURIComponent(S.ownerName));setList(d.items||[])}catch(e){console.warn('[Marklister] bootstrap failed',e)}}
-function setList(items){
-  S.list=Array.isArray(items)?items:[];
-  S.listMap=new Map(S.list.map(x=>[String(x.name||'').toLowerCase(),x]));
-  if(S.uiMode==='full'&&S.showList)renderListPanel();
-  refreshActivity(true);
-}
-async function ensureOwnerReady(timeoutMs=1800){const start=performance.now();while(performance.now()-start<timeoutMs){refreshSelfHudFromTopLeftRecent();if(S.ownerConfirmed&&S.ownerName)return true;await new Promise(r=>setTimeout(r,80));}return !!(S.ownerConfirmed&&S.ownerName)}
-async function addMark(name,reason){
-  name=String(name||'').trim();
-  if(!name)return alert('Type a user name.');
-  if(isBugWord(name))return alert(name+' is in the Bug Words list and cannot be added as a player.');
-  if(S.addBusy)return;
-
-  const key=name.toLowerCase();
-  if(S.listMap.has(key)){
-    return alert(name+' is already in your marklist.');
-  }
-
-  if(!(S.ownerConfirmed&&S.ownerName)){
-    const ok=await ensureOwnerReady();
-    if(!ok)return alert('Self username is not detected yet.');
-  }
-
-  reason=String(reason||'').trim()||'blank';
-  S.addBusy=true;
-  const btn=S.modal?.querySelector?.('#madd');
-  const oldText=btn?.textContent||'Add';
-  if(btn){btn.disabled=true;btn.textContent='Adding...'}
-
-  try{
-    const d=await api('/api/add','POST',{owner:S.ownerName,name,reason});
-    S.selectionMode=false;
-    S.selectedName=null;
-    setList(d.items||[]);
-    closeModal();
-    refreshActivity(true);
-  }catch(e){
-    alert('Add failed: '+e.message);
-  }finally{
-    S.addBusy=false;
-    if(btn&&btn.isConnected){btn.disabled=false;btn.textContent=oldText}
-  }
-}
-async function updateMark(id,name,reason){reason=String(reason||'').trim()||'blank';try{const d=await api('/api/update','POST',{owner:S.ownerName,id,name,reason});setList(d.items||[]);closeModal()}catch(e){alert('Update failed: '+e.message)}}
-async function deleteMark(id){try{const d=await api('/api/delete','POST',{owner:S.ownerName,id});setList(d.items||[])}catch(e){alert('Delete failed: '+e.message)}}
+async function bootstrap(force=false){if(!S.ownerConfirmed||!S.ownerName)return;if(!force&&Date.now()-S.lastSyncAt<2500)return;S.lastSyncAt=Date.now();try{const d=await api('/api/bootstrap?user='+encodeURIComponent(S.ownerName));applyPayload(d)}catch(e){console.warn('[Marklister] bootstrap failed',e);showError('BOOTSTRAP_FAILED',e.message)}}
+function setList(items){S.entries=Array.isArray(items)?items:[];rebuildDisplayMap()}
+async function ensureOwnerReady(timeoutMs=2200){const start=performance.now();while(performance.now()-start<timeoutMs){refreshSelfHudFromTopLeftRecent();if(S.ownerConfirmed&&S.ownerName)return true;await new Promise(r=>setTimeout(r,80))}if(!S.nameDetectErrorShown){S.nameDetectErrorShown=true;showError('SELF_NAME_DETECTION_FAILED','Self username could not be detected.')}return false}
+async function addEntry(name,reason,listId){name=String(name||'').trim();if(!name)return alert('Type a user name.');if(isBugWord(name))return alert(name+' is in the Bug Words list and cannot be added as a player.');if(S.addBusy)return;if(S.entries.some(x=>String(x.name||'').toLowerCase()===name.toLowerCase()))return alert(name+' is already in one of your lists. Use Move list instead.');if(!(S.ownerConfirmed&&S.ownerName)){const ok=await ensureOwnerReady();if(!ok)return}reason=String(reason||'').trim()||'blank';listId=Number(listId||S.addListId||defaultList()?.id);if(!listId)return showError('NO_LIST_AVAILABLE','No destination list exists.');S.addBusy=true;try{const d=await api('/api/entry/add','POST',{owner:S.ownerName,name,reason,listId});applyPayload(d);S.selectionMode=false;S.selectedName=null;closeModal();refreshActivity(true)}catch(e){showError('ADD_ENTRY_FAILED',e.message,{target:name})}finally{S.addBusy=false}}
+async function updateEntry(id,name,reason){reason=String(reason||'').trim()||'blank';try{const d=await api('/api/entry/update','POST',{owner:S.ownerName,id,name,reason});applyPayload(d);closeModal()}catch(e){showError('UPDATE_ENTRY_FAILED',e.message)}}
+async function moveEntry(id,listId){try{const d=await api('/api/entry/move','POST',{owner:S.ownerName,id,listId});applyPayload(d);closeModal()}catch(e){showError('MOVE_ENTRY_FAILED',e.message)}}
+async function deleteEntry(id){try{const d=await api('/api/entry/delete','POST',{owner:S.ownerName,id});applyPayload(d)}catch(e){showError('DELETE_ENTRY_FAILED',e.message)}}
+async function createList(name,color){name=String(name||'').trim();if(!name)return alert('Type a list name.');try{const d=await api('/api/list/create','POST',{owner:S.ownerName,name,color});applyPayload(d);closeModal()}catch(e){showError('CREATE_LIST_FAILED',e.message)}}
+async function updateList(id,name,color){try{const d=await api('/api/list/update','POST',{owner:S.ownerName,id,name,color});applyPayload(d);closeModal()}catch(e){showError('UPDATE_LIST_FAILED',e.message)}}
+async function deleteList(id){const l=listById(id);if(!l||l.is_default)return;if(!confirm('Delete list '+l.name+' and every entry inside it?'))return;try{const d=await api('/api/list/delete','POST',{owner:S.ownerName,id});applyPayload(d)}catch(e){showError('DELETE_LIST_FAILED',e.message)}}
 
 function createUI(){
   GM_addStyle(CSS);
   const root=document.createElement('div');root.id='ml-root';root.innerHTML=`
-  <div class="ml-panel ml-hidden" id="ml-panel"><div class="ml-head ml-drag" id="ml-head"><div class="ml-head-icons"><img class="ml-col" src="${ICON_COL}"><img class="ml-mark" src="${ICON_MARK}"></div><span class="ml-title ml-title-toggle" id="ml-title-full">Marklister</span><div class="ml-eye" id="ml-eye-full"></div></div><div class="ml-body"><button class="ml-mainbtn" id="ml-display">Display lister</button><div class="ml-short">Ctrl + D</div><button class="ml-mainbtn" id="ml-show">Show list</button><div class="ml-short">Ctrl + S</div><button class="ml-mainbtn" id="ml-add">Add Marklist</button><div class="ml-short">Ctrl + A</div><button class="ml-mainbtn" id="ml-help">Help</button><div class="ml-discord">Discord: Eclipsa1234</div><div class="ml-version">v${VERSION}</div></div></div>
+  <div class="ml-panel ml-hidden" id="ml-panel"><div class="ml-head ml-drag" id="ml-head"><div class="ml-head-icons"><img class="ml-col" src="${ICON_COL}"><img class="ml-mark" src="${ICON_MARK}"></div><span class="ml-title ml-title-toggle" id="ml-title-full">Marklister</span><div class="ml-eye" id="ml-eye-full"></div></div><div class="ml-body"><button class="ml-mainbtn" id="ml-display">Display lister</button><div class="ml-short">Alt + D</div><button class="ml-mainbtn" id="ml-show">Show list</button><div class="ml-short">Alt + S</div><button class="ml-mainbtn" id="ml-add">Add lister</button><div class="ml-short">Alt + A</div><button class="ml-mainbtn" id="ml-newlist">Make New list</button><div class="ml-short">Alt + M</div><button class="ml-mainbtn" id="ml-help">Help</button><div class="ml-discord">Discord: Eclipsa1234</div><div class="ml-version">v${VERSION} test</div></div></div>
   <div class="ml-compact ml-drag" id="ml-compact"><img class="ml-mark" src="${ICON_MARK}"><span class="ml-title ml-title-toggle" id="ml-title-compact">Marklister</span><div class="ml-eye" id="ml-eye-compact"></div></div>
   <div class="ml-tiny ml-hidden ml-drag" id="ml-tiny"><img class="ml-mark" src="${ICON_MARK}"><div class="ml-eye" id="ml-eye-tiny"></div></div>
   <div class="ml-listpanel ml-hidden" id="ml-list"><div class="ml-list-handle"></div><div id="ml-list-body"></div></div>`;
-  document.documentElement.appendChild(root);
-  const overlay=document.createElement('div');overlay.id='ml-overlay';document.documentElement.appendChild(overlay);
-  S.root=root;S.panel=root.querySelector('#ml-panel');S.compact=root.querySelector('#ml-compact');S.tiny=root.querySelector('#ml-tiny');S.listPanel=root.querySelector('#ml-list');S.overlay=overlay;
-  root.querySelector('#ml-title-full').onclick=e=>{e.preventDefault();e.stopPropagation();if(performance.now()<S.suppressTitleClickUntil)return;setUiMode('compact')};
-  root.querySelector('#ml-title-compact').onclick=e=>{e.preventDefault();e.stopPropagation();if(performance.now()<S.suppressTitleClickUntil)return;setUiMode('full')};
-  for(const id of ['#ml-eye-full','#ml-eye-compact','#ml-eye-tiny'])root.querySelector(id).onclick=e=>{e.preventDefault();e.stopPropagation();toggleUiVisibility()};
-  root.querySelector('#ml-display').onclick=e=>{e.preventDefault();e.stopPropagation();toggleDisplay()};root.querySelector('#ml-show').onclick=()=>{S.showList=!S.showList;renderUiState()};root.querySelector('#ml-add').onclick=openAddChoice;root.querySelector('#ml-help').onclick=openHelp;
-  installDrag(root.querySelector('#ml-head'));installDrag(root.querySelector('#ml-compact'));installDrag(root.querySelector('#ml-tiny'));
-  applySavedPosition();renderUiState();
+  document.documentElement.appendChild(root);const overlay=document.createElement('div');overlay.id='ml-overlay';document.documentElement.appendChild(overlay);S.root=root;S.panel=root.querySelector('#ml-panel');S.compact=root.querySelector('#ml-compact');S.tiny=root.querySelector('#ml-tiny');S.listPanel=root.querySelector('#ml-list');S.overlay=overlay;
+  root.querySelector('#ml-title-full').onclick=e=>{e.preventDefault();e.stopPropagation();if(performance.now()<S.suppressTitleClickUntil)return;setUiMode('compact')};root.querySelector('#ml-title-compact').onclick=e=>{e.preventDefault();e.stopPropagation();if(performance.now()<S.suppressTitleClickUntil)return;setUiMode('full')};for(const id of ['#ml-eye-full','#ml-eye-compact','#ml-eye-tiny'])root.querySelector(id).onclick=e=>{e.preventDefault();e.stopPropagation();toggleUiVisibility()};
+  root.querySelector('#ml-display').onclick=e=>{e.preventDefault();e.stopPropagation();openSide('display')};root.querySelector('#ml-show').onclick=()=>openSide('show-lists');root.querySelector('#ml-add').onclick=openAddChoice;root.querySelector('#ml-newlist').onclick=openNewList;root.querySelector('#ml-help').onclick=openHelp;
+  installDrag(root.querySelector('#ml-head'));installDrag(root.querySelector('#ml-compact'));installDrag(root.querySelector('#ml-tiny'));applySavedPosition();renderUiState();
 }
+
 function persistUiState(){
   try{
     GM_setValue(UI_STATE_KEY,{
@@ -674,36 +663,24 @@ function persistUiState(){
 function setUiMode(mode){if(mode!=='tiny')S.restoreUiMode=mode;S.uiMode=mode;if(mode!=='full')S.showList=false;renderUiState()}
 function toggleUiVisibility(){if(S.uiMode==='tiny'){S.uiMode=S.restoreUiMode||'compact'}else{S.restoreUiMode=S.uiMode;S.showList=false;S.uiMode='tiny'}renderUiState()}
 function toggleDisplay(){S.displayEnabled=!S.displayEnabled;renderUiState()}
-function renderUiState(){
-  S.panel.classList.toggle('ml-hidden',S.uiMode!=='full');
-  S.compact.classList.toggle('ml-hidden',S.uiMode!=='compact');
-  S.tiny.classList.toggle('ml-hidden',S.uiMode!=='tiny');
-  const listVisible=S.uiMode==='full'&&S.showList;
-  S.listPanel.classList.toggle('ml-hidden',!listVisible);
-  const eye=eyeSvg(S.uiMode!=='tiny');
-  for(const id of ['ml-eye-full','ml-eye-compact','ml-eye-tiny']){const e=document.getElementById(id);e.innerHTML=eye}
-  document.getElementById('ml-display').classList.toggle('active',S.displayEnabled);
-  document.getElementById('ml-show').classList.toggle('active',S.showList);
-  if(listVisible)renderListPanel();
-  persistUiState();
-  if(S.uiMode==='full'&&S.ownerConfirmed&&Date.now()-S.lastSyncAt>30000)bootstrap(false);
-  refreshActivity(true);
-}
-
 function applySavedPosition(){if(!S.root)return;const p=S.position;if(p&&Number.isFinite(p.x)&&Number.isFinite(p.y)){S.root.style.right='auto';S.root.style.left=Math.max(0,Math.min(innerWidth-70,p.x))+'px';S.root.style.top=Math.max(0,Math.min(innerHeight-40,p.y))+'px'}}
-function installDrag(handle){
-  handle.addEventListener('pointerdown',e=>{if(e.button!==0||e.target.closest('.ml-title-toggle,.ml-eye,.ml-mainbtn,button,input,textarea'))return;const r=S.root.getBoundingClientRect();S.drag={id:e.pointerId,sx:e.clientX,sy:e.clientY,left:r.left,top:r.top,moved:false};handle.setPointerCapture?.(e.pointerId);handle.classList.add('dragging')});
-  handle.addEventListener('pointermove',e=>{const d=S.drag;if(!d||d.id!==e.pointerId)return;const dx=e.clientX-d.sx,dy=e.clientY-d.sy;if(Math.hypot(dx,dy)>4)d.moved=true;const x=Math.max(0,Math.min(innerWidth-60,d.left+dx)),y=Math.max(0,Math.min(innerHeight-34,d.top+dy));S.root.style.right='auto';S.root.style.left=x+'px';S.root.style.top=y+'px'});
-  handle.addEventListener('pointerup',e=>{const d=S.drag;if(!d||d.id!==e.pointerId)return;handle.classList.remove('dragging');if(d.moved){S.suppressTitleClickUntil=performance.now()+250;const r=S.root.getBoundingClientRect();S.position={x:r.left,y:r.top};GM_setValue('marklister_pos',S.position)}S.drag=null});
+function installDrag(handle){handle.addEventListener('pointerdown',e=>{if(e.button!==0||e.target.closest('.ml-title-toggle,.ml-eye,.ml-mainbtn,button,input,textarea'))return;const r=S.root.getBoundingClientRect();S.drag={id:e.pointerId,sx:e.clientX,sy:e.clientY,left:r.left,top:r.top,moved:false};handle.setPointerCapture?.(e.pointerId);handle.classList.add('dragging')});handle.addEventListener('pointermove',e=>{const d=S.drag;if(!d||d.id!==e.pointerId)return;const dx=e.clientX-d.sx,dy=e.clientY-d.sy;if(Math.hypot(dx,dy)>4)d.moved=true;const x=Math.max(0,Math.min(innerWidth-60,d.left+dx)),y=Math.max(0,Math.min(innerHeight-34,d.top+dy));S.root.style.right='auto';S.root.style.left=x+'px';S.root.style.top=y+'px'});handle.addEventListener('pointerup',e=>{const d=S.drag;if(!d||d.id!==e.pointerId)return;handle.classList.remove('dragging');if(d.moved){S.suppressTitleClickUntil=performance.now()+250;const r=S.root.getBoundingClientRect();S.position={x:r.left,y:r.top};GM_setValue('marklister_pos',S.position)}S.drag=null})}
+function renderUiState(){S.panel.classList.toggle('ml-hidden',S.uiMode!=='full');S.compact.classList.toggle('ml-hidden',S.uiMode!=='compact');S.tiny.classList.toggle('ml-hidden',S.uiMode!=='tiny');const sideVisible=S.uiMode==='full'&&!!S.sideMode;S.listPanel.classList.toggle('ml-hidden',!sideVisible);const eye=eyeSvg(S.uiMode!=='tiny');for(const id of ['ml-eye-full','ml-eye-compact','ml-eye-tiny']){const e=document.getElementById(id);e.innerHTML=eye}document.getElementById('ml-display').classList.toggle('active',S.sideMode==='display');document.getElementById('ml-show').classList.toggle('active',String(S.sideMode||'').startsWith('show'));if(sideVisible)renderSidePanel();persistUiState();if(S.uiMode==='full'&&S.ownerConfirmed&&Date.now()-S.lastSyncAt>30000)bootstrap(false);refreshActivity(true)}
+function openSide(mode){if(S.uiMode!=='full')S.uiMode='full';S.sideMode=S.sideMode===mode?null:mode;if(mode==='show-lists')S.selectedListId=null;renderUiState()}
+function renderSidePanel(){const body=document.getElementById('ml-list-body');if(!body)return;body.innerHTML='';if(S.sideMode==='display'){const addRow=(label,on,click)=>{const r=document.createElement('div');r.className='ml-side-row';r.innerHTML=`<span class="grow">${esc(label)}</span><span class="ml-check ${on?'on':''}"></span>`;r.onclick=click;body.appendChild(r)};addRow('Display all',S.displayAll,()=>{S.displayAll=!S.displayAll;if(S.displayAll)S.displayedListIds.clear();rebuildDisplayMap();renderSidePanel()});for(const l of S.lists)addRow(l.name,S.displayAll||S.displayedListIds.has(Number(l.id)),()=>{S.displayAll=false;const id=Number(l.id);if(S.displayedListIds.has(id))S.displayedListIds.delete(id);else S.displayedListIds.add(id);rebuildDisplayMap();renderSidePanel()});return}
+  if(S.sideMode==='show-items'&&S.selectedListId){const l=listById(S.selectedListId);if(!l){S.sideMode='show-lists';return renderSidePanel()}const title=document.createElement('div');title.className='ml-list-title';title.innerHTML=`<span>${esc(l.name)}</span><span class="ml-color-box ${l.is_default?'locked':''}" style="background:${esc(l.color)}"></span>`;body.appendChild(title);const entries=S.entries.filter(x=>Number(x.list_id)===Number(l.id));if(!entries.length)body.innerHTML+=`<div style="color:#ddd;font-weight:700;padding:6px">empty</div>`;for(const item of entries){const d=document.createElement('div');d.className='ml-entry';d.innerHTML=`<div class="ml-entry-name">${esc(item.name)}</div><div class="ml-entry-reason">Reason : ${esc(item.reason||'blank')}</div><div class="ml-entry-actions"><button title="delete">🗑</button><button title="edit">✎</button></div>`;const [del,edit]=d.querySelectorAll('button');del.onclick=e=>{e.stopPropagation();if(confirm('Delete '+item.name+'?'))deleteEntry(item.id)};edit.onclick=e=>{e.stopPropagation();openEdit(item)};body.appendChild(d)}const back=document.createElement('button');back.className='ml-cancel';back.textContent='Back';back.onclick=()=>{S.sideMode='show-lists';S.selectedListId=null;renderSidePanel()};body.appendChild(back);return}
+  for(const l of S.lists){const r=document.createElement('div');r.className='ml-side-row';r.innerHTML=`<span class="grow">${esc(l.name)}</span><span class="ml-color-box ${l.is_default?'locked':''}" style="background:${esc(l.color)}"></span>${l.is_default?'':'<button class="ml-side-icon del" title="delete">🗑</button>'}<button class="ml-side-icon edit" title="edit">✎</button>`;r.querySelector('.grow').onclick=()=>{S.selectedListId=Number(l.id);S.sideMode='show-items';renderSidePanel()};const cb=r.querySelector('.ml-color-box');if(!l.is_default)cb.onclick=e=>{e.stopPropagation();chooseColor(l.color,c=>updateList(l.id,l.name,c))};const de=r.querySelector('.del');if(de)de.onclick=e=>{e.stopPropagation();deleteList(l.id)};const ed=r.querySelector('.edit');if(ed)ed.onclick=e=>{e.stopPropagation();openEditList(l)};body.appendChild(r)}
 }
-
-function renderListPanel(){const body=document.getElementById('ml-list-body');if(!body)return;body.innerHTML='';if(!S.list.length){body.innerHTML='<div style="color:#ddd;font-weight:700;padding:6px">empty</div>';return}for(const item of S.list){const d=document.createElement('div');d.className='ml-entry';d.innerHTML=`<div class="ml-entry-name">${esc(item.name)}</div><div class="ml-entry-reason">Reason : ${esc(item.reason||'blank')}</div><div class="ml-entry-actions"><button title="delete">🗑</button><button title="edit">✎</button></div>`;const [del,edit]=d.querySelectorAll('button');del.onclick=()=>{if(confirm('Delete '+item.name+'?'))deleteMark(item.id)};edit.onclick=()=>openEdit(item);body.appendChild(d)}}
 function closeModal(){if(S.modal)S.modal.remove();S.modal=null}
 function modal(html,dismiss=true){closeModal();const bg=document.createElement('div');bg.className='ml-modal-bg';bg.innerHTML=`<div class="ml-modal">${html}</div>`;if(dismiss)bg.onclick=e=>{if(e.target===bg)closeModal()};document.documentElement.appendChild(bg);S.modal=bg;setupAsciiInputs(bg);return bg.querySelector('.ml-modal')}
-function openAddChoice(){const m=modal('<div class="ml-modal-title">Add list</div><div class="ml-choices"><button class="ml-choice" id="mtype">Type name</button><button class="ml-choice" id="mclick">Click user</button></div>');m.querySelector('#mtype').onclick=openType;m.querySelector('#mclick').onclick=()=>{closeModal();S.selectionMode=true;S.selectedName=null;refreshActivity(true)}}
-function openType(){const m=modal('<div class="ml-modal-title">Typing user name</div><div class="ml-field-label">user name</div><div class="ml-row"><input id="mname" class="ml-input" autocomplete="off" spellcheck="false" inputmode="text"><button id="madd" class="ml-addbtn">Add</button></div><div class="ml-sp"></div><div class="ml-field-label">reason</div><textarea id="mreason" class="ml-textarea" autocomplete="off" spellcheck="false"></textarea>');m.querySelector('#mname').focus();m.querySelector('#madd').onclick=()=>addMark(m.querySelector('#mname').value.trim(),m.querySelector('#mreason').value.trim())}
-function openReason(name){S.selectedName=name;S.selectionMode=false;refreshActivity(true);const m=modal(`<div class="ml-modal-title">Selected ${esc(name)}</div><div class="ml-field-label">Type reason</div><div class="ml-row"><input id="mreason" class="ml-input" autocomplete="off" spellcheck="false"><button id="madd" class="ml-addbtn">Add</button></div>`,false);m.querySelector('#mreason').focus();m.querySelector('#madd').onclick=()=>addMark(name,m.querySelector('#mreason').value.trim())}
-function openEdit(item){const m=modal(`<div class="ml-modal-title">Edit</div><div class="ml-field-label">user name</div><input id="mname" class="ml-input" autocomplete="off" spellcheck="false" value="${esc(item.name)}"><div class="ml-sp"></div><div class="ml-field-label">reason</div><textarea id="mreason" class="ml-textarea" autocomplete="off" spellcheck="false">${esc(item.reason||'')}</textarea><button id="msave" class="ml-cancel">Save</button>`);m.querySelector('#msave').onclick=()=>updateMark(item.id,m.querySelector('#mname').value.trim(),m.querySelector('#mreason').value.trim())}
+function openAddChoice(){const m=modal('<div class="ml-modal-title">Add list</div><div class="ml-choices"><button class="ml-choice" id="mtype">Type name</button><button class="ml-choice" id="mclick">Click user</button></div>');m.querySelector('#mtype').onclick=()=>openAddForm(null,true);m.querySelector('#mclick').onclick=()=>{closeModal();S.selectionMode=true;S.selectedName=null;refreshActivity(true)}}
+function openAddForm(name,withName){const def=defaultList();S.addListId=S.addListId||def?.id||S.lists[0]?.id;const nameBlock=withName?'<div class="ml-field-label">user name</div><div class="ml-row"><input id="mname" class="ml-input" autocomplete="off" spellcheck="false"><button id="madd" class="ml-addbtn">Add</button></div>':'<div class="ml-row"><div class="ml-field-label" style="flex:1">Selected '+esc(name)+'</div><button id="madd" class="ml-addbtn">Add</button></div>';const m=modal(`<div class="ml-modal-title">${withName?'Typing user name':'Add '+esc(name)}</div>${nameBlock}<div class="ml-sp"></div><div class="ml-field-label">reason</div><textarea id="mreason" class="ml-textarea" autocomplete="off" spellcheck="false"></textarea>${listSelectorHtml(S.addListId)}`);bindListSelectors(m,id=>S.addListId=id);if(withName)m.querySelector('#mname').focus();m.querySelector('#madd').onclick=()=>addEntry(withName?m.querySelector('#mname').value.trim():name,m.querySelector('#mreason').value.trim(),S.addListId)}
+function openReason(name){S.selectedName=name;S.selectionMode=false;refreshActivity(true);openAddForm(name,false)}
+function openEdit(item){const m=modal(`<div class="ml-modal-title">Edit</div><div class="ml-field-label">user name</div><input id="mname" class="ml-input" autocomplete="off" spellcheck="false" value="${esc(item.name)}"><div class="ml-sp"></div><div class="ml-field-label">reason</div><textarea id="mreason" class="ml-textarea" autocomplete="off" spellcheck="false">${esc(item.reason||'blank')}</textarea><div class="ml-row" style="margin-top:12px"><button id="msave" class="ml-addbtn">save</button><button id="mmove" class="ml-cancel">Move list</button></div>`);m.querySelector('#msave').onclick=()=>updateEntry(item.id,m.querySelector('#mname').value.trim(),m.querySelector('#mreason').value.trim());m.querySelector('#mmove').onclick=()=>openMoveChooser(item,m)}
+function openMoveChooser(item,parent){let old=parent.querySelector('.ml-move-popup');if(old)return old.remove();const box=document.createElement('div');box.className='ml-move-popup';for(const l of S.lists){const r=document.createElement('div');r.className='ml-move-row';r.innerHTML=`<span>${esc(l.name)}</span><button class="ml-addbtn">Move</button>`;r.querySelector('button').disabled=Number(l.id)===Number(item.list_id);r.querySelector('button').onclick=()=>moveEntry(item.id,Number(l.id));box.appendChild(r)}parent.appendChild(box)}
+function openEditList(l){let color=l.color;const m=modal(`<div class="ml-modal-title">Edit list</div><div class="ml-field-label">list name</div><input id="mlname" class="ml-input" value="${esc(l.name)}"><div class="ml-field-label" style="margin-top:8px">color</div><div id="mlcolor" class="ml-color-box ${l.is_default?'locked':''}" style="background:${esc(color)}"></div><div style="margin-top:12px"><button id="mlsave" class="ml-addbtn">save</button></div>`);const c=m.querySelector('#mlcolor');if(!l.is_default)c.onclick=()=>chooseColor(color,v=>{color=v;c.style.background=v});m.querySelector('#mlsave').onclick=()=>updateList(l.id,m.querySelector('#mlname').value.trim(),l.is_default?DEFAULT_LIST_COLOR:color)}
+function openNewList(){let color=randomUnusedColor();const m=modal(`<div class="ml-modal-title">Make New list</div><div class="ml-field-label">list name</div><div class="ml-row"><input id="mlname" class="ml-input" autocomplete="off" spellcheck="false"><div id="mlcolor" class="ml-color-box" style="background:${color}"></div></div><div style="margin-top:12px"><button id="mlsave" class="ml-addbtn">save</button></div>`);const c=m.querySelector('#mlcolor');c.onclick=()=>chooseColor(color,v=>{color=v;c.style.background=v});m.querySelector('#mlsave').onclick=()=>createList(m.querySelector('#mlname').value.trim(),color);m.querySelector('#mlname').focus()}
+
 function openHelp(){const m=modal('<div class="ml-modal-title">Help</div><div style="font-weight:700;line-height:1.5">Display lister: marklisted users are highlighted.<br>Show list: view / edit / delete your list.<br>Add Marklist: type a name or click a visible player.</div><div class="ml-row" style="margin-top:10px"><button id="madmin" class="ml-cancel">Developer page</button><button id="mclose" class="ml-cancel">Close</button></div>');m.querySelector('#madmin').onclick=()=>{const u=S.serverUrl.replace(/\/$/,'')+'/admin';if(typeof GM_openInTab==='function')GM_openInTab(u,{active:true,insert:true});else window.open(u,'_blank')};m.querySelector('#mclose').onclick=closeModal}
 
 function setupAsciiInputs(scope){
@@ -771,30 +748,8 @@ function ensureOverlayNode(key,p){
   for(const el of [ring,hit,name,line,badge])S.overlay.appendChild(el);
   n={ring,hit,name,line,badge,player:p};S.overlayNodes.set(key,n);return n;
 }
-function drawOverlay(){
-  if(!S.overlay)return;
-  const active=S.selectionMode||(S.displayEnabled&&S.listMap.size>0);
-  if(!active){for(const k of [...S.overlayNodes.keys()])removeOverlayNode(k);if(S.hint){S.hint.remove();S.hint=null}return}
-  const players=overlayPlayers(),seen=new Set();
-  for(const p of players){
-    const key=`${p.username}\0${p.level}`,marked=S.listMap.has(p.username.toLowerCase());
-    if(!S.selectionMode&&!marked)continue;
-    seen.add(key);const n=ensureOverlayNode(key,p);n.player=p;
-    const d=Math.max(12,p.diameter||50),hd=Math.max(d,p.hitDiameter||d+20),x=p.cx,y=p.cy;
-    n.ring.style.display=(S.selectionMode||marked)?'block':'none';n.ring.className='ml-ring '+((marked||S.selectedName===p.username)?'red':'blue');n.ring.style.left=x+'px';n.ring.style.top=y+'px';n.ring.style.width=d+'px';n.ring.style.height=d+'px';
-    n.hit.style.display=S.selectionMode?'block':'none';n.hit.style.left=x+'px';n.hit.style.top=y+'px';n.hit.style.width=hd+'px';n.hit.style.height=hd+'px';
-    n.name.style.display=S.selectionMode?'block':'none';n.name.style.left=x+'px';n.name.style.top=(y-d/2-7)+'px';
-    if(n.lastName!==p.username){n.lastName=p.username;n.name.textContent=p.username;n.badge.innerHTML=`<div class="small">marklist</div><div class="big">${esc(p.username)}</div>`}
-    if(S.displayEnabled&&marked){
-      const bx=x+d*.72,by=y-d*.58,dx=bx-x,dy=by-y,len=Math.hypot(dx,dy),ang=Math.atan2(dy,dx)*180/Math.PI;
-      n.line.style.display='block';n.line.style.left=x+'px';n.line.style.top=y+'px';n.line.style.width=len+'px';n.line.style.transform=`rotate(${ang}deg)`;
-      n.badge.style.display='block';n.badge.style.left=(bx-2)+'px';n.badge.style.top=(by-11)+'px';
-    }else{n.line.style.display='none';n.badge.style.display='none'}
-  }
-  for(const k of [...S.overlayNodes.keys()])if(!seen.has(k))removeOverlayNode(k);
-  let h=S.hint;
-  if(S.selectionMode){if(!h||!h.isConnected){h=document.createElement('div');h.className='ml-hint';S.overlay.appendChild(h);S.hint=h}const txt=S.selectedName?'Selected '+S.selectedName:'Click The User . . .';if(h.textContent!==txt)h.textContent=txt}else if(h){h.remove();S.hint=null}
-}
+function drawOverlay(){if(!S.overlay)return;const active=S.selectionMode||(S.displayEnabled&&S.listMap.size>0);if(!active){for(const k of [...S.overlayNodes.keys()])removeOverlayNode(k);if(S.hint){S.hint.remove();S.hint=null}return}const players=overlayPlayers(),seen=new Set();for(const p of players){const key=`${p.username}\0${p.level}`,entry=S.listMap.get(p.username.toLowerCase()),marked=!!entry;if(!S.selectionMode&&!marked)continue;seen.add(key);const n=ensureOverlayNode(key,p);n.player=p;const d=Math.max(12,p.diameter||50),hd=Math.max(d,p.hitDiameter||d+20),x=p.cx,y=p.cy,color=marked?(entry.list_color||listById(entry.list_id)?.color||DEFAULT_LIST_COLOR):'#4e99e5';n.ring.style.display=(S.selectionMode||marked)?'block':'none';n.ring.className='ml-ring';n.ring.style.background=hexToRgba(color,marked?.26:.16);n.ring.style.border='3px solid '+hexToRgba(color,.72);n.ring.style.left=x+'px';n.ring.style.top=y+'px';n.ring.style.width=d+'px';n.ring.style.height=d+'px';n.hit.style.display=S.selectionMode?'block':'none';n.hit.style.left=x+'px';n.hit.style.top=y+'px';n.hit.style.width=hd+'px';n.hit.style.height=hd+'px';n.name.style.display=S.selectionMode?'block':'none';n.name.style.left=x+'px';n.name.style.top=(y-d/2-7)+'px';if(n.lastName!==p.username||n.lastList!==entry?.list_name){n.lastName=p.username;n.lastList=entry?.list_name;n.name.textContent=p.username;n.badge.innerHTML=`<div class="small">${esc(entry?.list_name||'select')}</div><div class="big">${esc(p.username)}</div>`}if(S.displayEnabled&&marked){const bx=x+d*.72,by=y-d*.58,dx=bx-x,dy=by-y,len=Math.hypot(dx,dy),ang=Math.atan2(dy,dx)*180/Math.PI;n.line.style.display='block';n.line.style.background=color;n.line.style.left=x+'px';n.line.style.top=y+'px';n.line.style.width=len+'px';n.line.style.transform=`rotate(${ang}deg)`;n.badge.style.display='block';n.badge.style.background=color;n.badge.style.left=(bx-2)+'px';n.badge.style.top=(by-11)+'px'}else{n.line.style.display='none';n.badge.style.display='none'}}for(const k of [...S.overlayNodes.keys()])if(!seen.has(k))removeOverlayNode(k);let h=S.hint;if(S.selectionMode){if(!h||!h.isConnected){h=document.createElement('div');h.className='ml-hint';S.overlay.appendChild(h);S.hint=h}const txt=S.selectedName?'Selected '+S.selectedName:'Click The User . . .';if(h.textContent!==txt)h.textContent=txt}else if(h){h.remove();S.hint=null}}
+
 function overlayLoop(){scheduleOverlayLoop(false)}
 
 function installInputShield(){
@@ -810,7 +765,8 @@ function installInputShield(){
   document.addEventListener('pointerdown',e=>{if(e.target instanceof Element&&e.target.closest('.ml-modal-bg'))e.stopPropagation()},false);
   document.addEventListener('click',e=>{if(e.target instanceof Element&&e.target.closest('.ml-modal-bg'))e.stopPropagation()},false);
 }
-function installKeys(){window.addEventListener('keydown',e=>{if(editFocusedInputFromKey(e)){e.preventDefault();e.stopImmediatePropagation();return}if(e.target instanceof Element&&e.target.closest('.ml-input,.ml-textarea'))return;if(e.key==='Escape'&&S.selectionMode){S.selectionMode=false;S.selectedName=null;closeModal();refreshActivity(true);return}if(!e.ctrlKey)return;const k=e.key.toLowerCase();if(k==='d'){e.preventDefault();toggleDisplay()}else if(k==='s'){e.preventDefault();S.showList=!S.showList;if(S.uiMode!=='full')S.uiMode='full';renderUiState()}else if(k==='a'){e.preventDefault();openAddChoice()}},true)}
+function installKeys(){window.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();cancelCurrentTask();return}if(editFocusedInputFromKey(e)){e.preventDefault();e.stopImmediatePropagation();return}if(e.target instanceof Element&&e.target.closest('.ml-input,.ml-textarea'))return;if(!e.altKey||e.ctrlKey||e.metaKey)return;const k=e.key.toLowerCase();if(k==='d'){e.preventDefault();openSide('display')}else if(k==='s'){e.preventDefault();openSide('show-lists')}else if(k==='a'){e.preventDefault();openAddChoice()}else if(k==='m'){e.preventDefault();openNewList()}},true)}
+
 async function openDeveloperMode(){
   const pw=prompt('Developer password');
   if(pw===null)return;
@@ -823,6 +779,7 @@ async function openDeveloperMode(){
 }
 function registerMenu(){GM_registerMenuCommand('Marklister: 새로고침',()=>bootstrap(true));GM_registerMenuCommand('Marklister: 사용자 인식 초기화',()=>{GM_setValue('marklister_owner','');S.ownerName='';S.ownerConfirmed=false;S.selfHud=null;S.labelCapture.selfHud=null;S.ownerCandidate=null;alert('Owner lock cleared. Reload florr.io.');});GM_registerMenuCommand('Marklister: 개발자 모드',openDeveloperMode);GM_registerMenuCommand('Marklister: 개발자 페이지',()=>{const u=DEFAULT_SERVER_URL+'/admin';if(typeof GM_openInTab==='function')GM_openInTab(u,{active:true,insert:true});else window.open(u,'_blank')})}
 
-function start(){installFlorrkitHitboxBridge();createUI();installInputShield();installCanvasCapture();installKeys();registerMenu();refreshBugWords();refreshActivity(true)}
+function installGlobalErrorCapture(){const ours=v=>{const s=String(v||'').toLowerCase();return s.includes('marklister')||s.includes('userscript')};window.addEventListener('error',e=>{const st=e?.error?.stack||e?.filename||'';if(e?.error&&ours(st))showError('UNCAUGHT_ERROR',e.error.message||e.message,{stack:e.error.stack||''})});window.addEventListener('unhandledrejection',e=>{const r=e.reason,st=r?.stack||'';if(ours(st))showError('UNHANDLED_REJECTION',r?.message||String(r),{stack:st})})}
+function start(){S.nameDetectStartedAt=Date.now();installFlorrkitHitboxBridge();createUI();installInputShield();installCanvasCapture();installKeys();installGlobalErrorCapture();registerMenu();refreshBugWords();refreshActivity(true)}
 start();
 })();
