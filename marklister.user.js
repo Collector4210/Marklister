@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Marklister for florr.io
 // @namespace    marklister.florr.public
-// @version      1.5.2
+// @version      1.5.3
 // @updateURL    https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
 // @downloadURL  https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
 // @description  Marklister v1.5 test: multiple custom lists, list colors, move, persistent display selection, safer UI cancellation, error reports, Bug Words, and low-load tracking.
@@ -21,7 +21,7 @@
 (() => {
 'use strict';
 const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-const VERSION = '1.5.2-test';
+const VERSION = '1.5.3-test';
 const DEFAULT_SERVER_URL = 'https://marklister-server.starcofan.workers.dev';
 const CLIENT_TOKEN_KEY = 'marklister_client_token_v1';
 const UI_STATE_KEY = 'marklister_ui_state_v1';
@@ -71,7 +71,7 @@ const S = {
   displayAll: !!V15_SAVED.displayAll,
   displayedListIds: new Set(Array.isArray(V15_SAVED.displayedListIds)?V15_SAVED.displayedListIds.map(Number).filter(Number.isFinite):[]),
   sideMode: null, selectedListId: null, addListId: null,
-  errorOpen: false, nameDetectStartedAt: Date.now(), bugRejectCount: 0, nameDetectErrorShown: false,
+  errorOpen: false, nameDetectActive: false, nameDetectStartedAt: 0, nameDetectEvidence: '', bugRejectCount: 0, nameDetectErrorShown: false,
   bugWords: new Set((()=>{try{const cached=GM_getValue(BUG_WORDS_CACHE_KEY,[]);return Array.isArray(cached)?cached.map(v=>String(v||'').trim().toLowerCase()).filter(Boolean):[]}catch{return []}})()),
   bugWordsReady: false,
   uiMode: ['full','compact','tiny'].includes(SAVED_UI.uiMode) ? SAVED_UI.uiMode : 'compact',
@@ -99,11 +99,12 @@ const S = {
 };
 
 const CSS = `
-#ml-root{position:fixed;right:18px;top:18px;z-index:1000000;font-family:Arial,Helvetica,sans-serif;color:#fff;user-select:none;touch-action:none}
+#ml-root{position:fixed;right:18px;top:18px;z-index:1000000;font-family:'Ubuntu',Arial,Helvetica,sans-serif;color:#fff;user-select:none;touch-action:none}
+#ml-root,#ml-root *,.ml-modal-bg,.ml-modal-bg *,.ml-error-bg,.ml-error-bg *,.ml-color-palette-bg,.ml-color-palette-bg *{font-family:'Ubuntu',Arial,Helvetica,sans-serif!important}
 .ml-panel,.ml-compact,.ml-tiny,.ml-listpanel{background:#777174;border:2px solid #3d3b3d;box-shadow:0 5px 15px rgba(0,0,0,.30)}
 .ml-panel{width:272px;border-radius:6px;overflow:visible}.ml-head{height:39px;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:0 7px;background:#686366;border-radius:4px 4px 0 0}.ml-head-icons{justify-self:start;display:flex;align-items:center;gap:5px;min-width:0}.ml-col{width:21px;height:21px;object-fit:contain}.ml-mark{width:24px;height:24px;object-fit:contain}.ml-title{font-size:22px;font-weight:900;letter-spacing:.2px;white-space:nowrap;justify-self:center;text-align:center}.ml-title-toggle{cursor:pointer}.ml-drag{cursor:grab}.ml-drag.dragging{cursor:grabbing}
 .ml-eye{width:19px;height:15px;border:0;border-radius:0;background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:0 0 auto;opacity:.95;justify-self:end}.ml-eye:hover{opacity:1}.ml-eye svg{width:18px;height:13px;stroke:#292929;fill:none;stroke-width:2.2}
-.ml-body{padding:7px 9px 6px}.ml-mainbtn{width:100%;border:0;border-radius:4px;background:#969193;color:#fff;padding:6px 7px 5px;font-size:21px;line-height:1.05;font-weight:900;cursor:pointer;box-sizing:border-box}.ml-mainbtn.active{background:#c5c1c2}.ml-short{font-size:13px;font-weight:700;color:#d8d4d5;text-align:center;margin:1px 0 6px}.ml-discord{font-size:12px;font-weight:700;color:#d2ced0;text-align:center;margin-top:4px}.ml-version{font-size:10px;font-weight:700;color:#bcb7b9;text-align:center;margin-top:1px;opacity:.9}
+.ml-body{padding:7px 9px 6px}.ml-owner-name{font-size:14px;font-weight:900;color:#eee;text-align:center;margin:0 0 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ml-owner-name.waiting{color:#c9c5c7}.ml-owner-name.detecting{color:#fff}.ml-mainbtn{width:100%;border:0;border-radius:4px;background:#969193;color:#fff;padding:6px 7px 5px;font-size:21px;line-height:1.05;font-weight:900;cursor:pointer;box-sizing:border-box}.ml-mainbtn.active{background:#c5c1c2}.ml-short{font-size:13px;font-weight:700;color:#d8d4d5;text-align:center;margin:1px 0 6px}.ml-discord{font-size:12px;font-weight:700;color:#d2ced0;text-align:center;margin-top:4px}.ml-version{font-size:10px;font-weight:700;color:#bcb7b9;text-align:center;margin-top:1px;opacity:.9}
 .ml-compact{height:36px;border-radius:5px;padding:0 7px;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;min-width:205px}.ml-compact .ml-mark{justify-self:start}.ml-compact .ml-title{font-size:21px;justify-self:center}.ml-compact .ml-eye{justify-self:end;width:19px;height:15px}
 .ml-tiny{height:26px;border-radius:4px;padding:0 4px;display:flex;align-items:center;gap:3px;width:47px;box-sizing:border-box}.ml-tiny .ml-mark{width:18px;height:18px}.ml-tiny .ml-eye{width:17px;height:12px}.ml-tiny .ml-eye svg{width:16px;height:11px}.ml-hidden{display:none!important}
 .ml-listpanel{position:absolute;right:calc(100% + 7px);top:20px;width:245px;min-height:300px;max-height:440px;border-radius:9px;padding:10px 8px 8px;overflow:auto}.ml-list-handle{width:48px;height:4px;background:#504d4e;border-radius:2px;margin:0 auto 10px}.ml-entry{background:#918c8e;border-radius:4px;padding:7px 40px 7px 8px;margin:7px 0;position:relative;min-height:42px}.ml-entry-name{font-size:16px;font-weight:800}.ml-entry-reason{font-size:13px;font-weight:700;color:#ddd;margin-top:2px}.ml-entry-actions{position:absolute;right:5px;top:5px;display:flex;flex-direction:column;gap:2px}.ml-entry-actions button{width:25px;height:22px;border:0;background:transparent;color:#111;font-size:17px;cursor:pointer;padding:0}
@@ -368,7 +369,7 @@ function refreshActivity(restartOverlay=true){
 
 function normalizeBugWord(text){return String(text||'').trim().toLowerCase()}
 function isBugWord(text){const key=normalizeBugWord(text);return !!key&&S.bugWords.has(key)}
-function setBugWords(words){const normalized=[...new Set((Array.isArray(words)?words:[]).map(normalizeBugWord).filter(Boolean))];S.bugWords=new Set(normalized);try{GM_setValue(BUG_WORDS_CACHE_KEY,normalized)}catch{}if(S.ownerName&&isBugWord(S.ownerName)){S.ownerName='';S.ownerConfirmed=false;S.ownerCandidate=null;S.selfHud=null;S.labelCapture.selfHud=null;S.list=[];S.listMap.clear();S.lastSyncAt=0}}
+function setBugWords(words){const normalized=[...new Set((Array.isArray(words)?words:[]).map(normalizeBugWord).filter(Boolean))];S.bugWords=new Set(normalized);try{GM_setValue(BUG_WORDS_CACHE_KEY,normalized)}catch{}if(S.ownerName&&isBugWord(S.ownerName)){S.ownerName='';S.ownerConfirmed=false;S.ownerCandidate=null;S.selfHud=null;S.labelCapture.selfHud=null;S.list=[];S.listMap.clear();S.lastSyncAt=0;S.nameDetectActive=false;S.nameDetectStartedAt=0;updateOwnerLabel()}}
 async function refreshBugWords(){const timer=setTimeout(()=>{S.bugWordsReady=true;refreshSelfHudFromTopLeftRecent()},2500);try{const d=await api('/api/bug-words');setBugWords(d?.words||[])}catch(e){console.warn('[Marklister] Bug Words sync failed; using cached list',e)}finally{clearTimeout(timer);S.bugWordsReady=true;refreshSelfHudFromTopLeftRecent()}}
 
 function textLooksLikeRarity(text){
@@ -395,8 +396,34 @@ function inSelfHudBroadZone(p){const maxX=Math.min(470,innerWidth*.36),maxY=Math
 function canvasPoint(ctx,x,y){try{const m=ctx.getTransform();return{x:m.a*Number(x||0)+m.c*Number(y||0)+m.e,y:m.b*Number(x||0)+m.d*Number(y||0)+m.f}}catch{return{x:Number(x||0),y:Number(y||0)}}}
 function canvasPointToClient(ctx,p){try{const c=ctx.canvas,r=c.getBoundingClientRect();if(r.width>0&&r.height>0&&c.width>0&&c.height>0)return{x:r.left+p.x*(r.width/c.width),y:r.top+p.y*(r.height/c.height)}}catch{}return{x:p.x,y:p.y}}
 
+function updateOwnerLabel(){
+  const el=document.getElementById('ml-owner-name');
+  if(!el)return;
+  if(S.ownerConfirmed&&S.ownerName){
+    el.textContent='User: '+S.ownerName;
+    el.className='ml-owner-name';
+  }else if(S.nameDetectActive){
+    el.textContent='User: Detecting...';
+    el.className='ml-owner-name detecting';
+  }else{
+    el.textContent='User: Waiting for game...';
+    el.className='ml-owner-name waiting';
+  }
+}
+function activateSelfNameDetection(reason){
+  if(S.ownerConfirmed||S.nameDetectActive)return;
+  S.nameDetectActive=true;
+  S.nameDetectStartedAt=Date.now();
+  S.nameDetectEvidence=String(reason||'gameplay-hud');
+  S.nameDetectErrorShown=false;
+  S.bugRejectCount=0;
+  S.ownerCandidate=null;
+  updateOwnerLabel();
+}
+
 function refreshSelfHudFromTopLeftRecent(){
   const cap=S.labelCapture,now=Date.now();
+  if(!S.ownerConfirmed&&!S.nameDetectActive)return cap.selfHud;
   const recent=cap.topLeftRecent.filter(r=>now-r.t<3500).filter(r=>inSelfHudBroadZone(r));
   if(!recent.length)return cap.selfHud;
   const levelGroups=new Map(),nameGroups=new Map();
@@ -423,7 +450,7 @@ function refreshSelfHudFromTopLeftRecent(){
       if(!best||score>best.score)best={score,username:ng.username,level:lg.level,nr,lr,nCount:ng.rows.length,lCount:lg.rows.length};
     }
   }
-  if(!best){if(!S.ownerConfirmed&&!S.nameDetectErrorShown&&Date.now()-S.nameDetectStartedAt>18000){S.nameDetectErrorShown=true;showError('SELF_NAME_DETECTION_FAILED','Could not detect a valid florr.io username after repeated attempts.')}return cap.selfHud;}
+  if(!best){if(S.nameDetectActive&&!S.ownerConfirmed&&!S.nameDetectErrorShown&&Date.now()-S.nameDetectStartedAt>18000){S.nameDetectErrorShown=true;showError('SELF_NAME_DETECTION_FAILED','Could not detect a valid florr.io username after gameplay started.',{stage:'SELF_HUD_DETECT',gameplayEvidence:S.nameDetectEvidence,elapsedMs:Date.now()-S.nameDetectStartedAt})}return cap.selfHud;}
   if(isBugWord(best.username)){S.bugRejectCount++;S.ownerCandidate=null;if(!S.nameDetectErrorShown&&S.bugRejectCount>=10){S.nameDetectErrorShown=true;showError('SELF_NAME_DETECTION_FAILED','Repeatedly detected only Bug Words.',{lastCandidate:best.username})}return cap.selfHud}
   if(!S.bugWordsReady)return cap.selfHud;
 
@@ -445,7 +472,7 @@ function refreshSelfHudFromTopLeftRecent(){
   }
   cap.selfHud={username:S.ownerName,guild:null,level:best.level,x:best.lr.x,y:best.lr.y,lastSeen:now,isHud:true,source:'locked-fixed-HUD',confidence:{nameDraws:best.nCount,levelDraws:best.lCount}};
   S.selfHud=cap.selfHud;
-  if(!S.ownerConfirmed){S.ownerConfirmed=true;bootstrap(true)}
+  if(!S.ownerConfirmed){S.ownerConfirmed=true;updateOwnerLabel();bootstrap(true)}
   return cap.selfHud;
 }
 
@@ -510,18 +537,26 @@ function recordCanvasText(ctx,args){
   while(cap.recent.length&&cap.recent[0].t<cutoff)cap.recent.shift();
   if(cap.recent.length>120)cap.recent.splice(0,cap.recent.length-120);
 
+  const selfLevelMatch=/^Lvl\.?\s*[:#]?\s*(\d+)$/i.exec(text);
+  if(!S.ownerConfirmed&&selfLevelMatch&&inSelfHudLevelZone(client)){
+    // Loading screens (Connecting / Logging in) and the Ready/start screen do not
+    // have the fixed top-left gameplay Lvl HUD. Start the detection clock only
+    // after this gameplay-only evidence appears.
+    activateSelfNameDetection('top-left Lvl HUD');
+  }
+
   if(!S.ownerConfirmed&&client.x<520&&client.y<280){
-    if(isBugWord(text)&&inSelfHudNameZone(client)){
+    if(S.nameDetectActive&&isBugWord(text)&&inSelfHudNameZone(client)){
       S.bugRejectCount++;
-      if(!S.nameDetectErrorShown&&S.bugRejectCount>=10){S.nameDetectErrorShown=true;showError('SELF_NAME_DETECTION_FAILED','Repeatedly detected only Bug Words.',{lastCandidate:text})}
+      if(!S.nameDetectErrorShown&&S.bugRejectCount>=10){S.nameDetectErrorShown=true;showError('SELF_NAME_DETECTION_FAILED','Repeatedly detected only Bug Words.',{stage:'SELF_HUD_DETECT',gameplayEvidence:S.nameDetectEvidence,lastCandidate:text})}
     }
     cap.topLeftRecent.push({text,x:client.x,y:client.y,t:Date.now(),font:String(ctx.font||''),fillStyle:String(ctx.fillStyle??'')});
     const tc=Date.now()-5000;
     cap.topLeftRecent=cap.topLeftRecent.filter(r=>r.t>=tc).slice(-120);
-    refreshSelfHudFromTopLeftRecent();
+    if(S.nameDetectActive)refreshSelfHudFromTopLeftRecent();
   }
 
-  const lm=/^Lvl\.?\s*[:#]?\s*(\d+)$/i.exec(text);if(!lm)return;
+  const lm=selfLevelMatch;if(!lm)return;
   const level=Number(lm[1]);
 
   if(!S.ownerConfirmed&&inSelfHudLevelZone(client)){refreshSelfHudFromTopLeftRecent();return}
@@ -839,7 +874,23 @@ async function bootstrap(force=false){
   return S.bootstrapPromise;
 }
 function setList(items){S.entries=Array.isArray(items)?items:[];rebuildDisplayMap()}
-async function ensureOwnerReady(timeoutMs=2200){const start=performance.now();while(performance.now()-start<timeoutMs){refreshSelfHudFromTopLeftRecent();if(S.ownerConfirmed&&S.ownerName)return true;await new Promise(r=>setTimeout(r,80))}if(!S.nameDetectErrorShown){S.nameDetectErrorShown=true;showError('SELF_NAME_DETECTION_FAILED','Self username could not be detected.')}return false}
+async function ensureOwnerReady(timeoutMs=2200){
+  const start=performance.now();
+  while(performance.now()-start<timeoutMs){
+    if(S.nameDetectActive)refreshSelfHudFromTopLeftRecent();
+    if(S.ownerConfirmed&&S.ownerName)return true;
+    await new Promise(r=>setTimeout(r,80));
+  }
+  if(!S.nameDetectActive){
+    alert('Enter the game first so Marklister can detect your username.');
+    return false;
+  }
+  if(!S.nameDetectErrorShown){
+    S.nameDetectErrorShown=true;
+    showError('SELF_NAME_DETECTION_FAILED','Self username could not be detected after gameplay started.',{stage:'SELF_HUD_DETECT',gameplayEvidence:S.nameDetectEvidence});
+  }
+  return false
+}
 async function addEntry(name,reason,listId){name=String(name||'').trim();if(!name)return alert('Type a user name.');if(isBugWord(name))return alert(name+' is in the Bug Words list and cannot be added as a player.');if(S.addBusy)return;if(S.entries.some(x=>String(x.name||'').toLowerCase()===name.toLowerCase()))return alert(name+' is already in one of your lists. Use Move list instead.');if(!(S.ownerConfirmed&&S.ownerName)){const ok=await ensureOwnerReady();if(!ok)return}reason=String(reason||'').trim()||'blank';listId=Number(listId||S.addListId||defaultList()?.id);if(!listId)return showError('NO_LIST_AVAILABLE','No destination list exists.');S.addBusy=true;try{const d=await api('/api/entry/add','POST',{owner:S.ownerName,name,reason,listId});applyPayload(d);S.selectionMode=false;S.selectedName=null;closeModal();refreshActivity(true)}catch(e){showError('ADD_ENTRY_FAILED',e.message,{target:name})}finally{S.addBusy=false}}
 async function updateEntry(id,name,reason){reason=String(reason||'').trim()||'blank';try{const d=await api('/api/entry/update','POST',{owner:S.ownerName,id,name,reason});applyPayload(d);closeModal()}catch(e){showError('UPDATE_ENTRY_FAILED',e.message)}}
 async function moveEntry(id,listId){try{const d=await api('/api/entry/move','POST',{owner:S.ownerName,id,listId});applyPayload(d);closeModal()}catch(e){showError('MOVE_ENTRY_FAILED',e.message)}}
@@ -851,7 +902,7 @@ async function deleteList(id){const l=listById(id);if(!l||l.is_default)return;if
 function createUI(){
   GM_addStyle(CSS);
   const root=document.createElement('div');root.id='ml-root';root.innerHTML=`
-  <div class="ml-panel ml-hidden" id="ml-panel"><div class="ml-head ml-drag" id="ml-head"><div class="ml-head-icons"><img class="ml-col" src="${ICON_COL}"><img class="ml-mark" src="${ICON_MARK}"></div><span class="ml-title ml-title-toggle" id="ml-title-full">Marklister</span><div class="ml-eye" id="ml-eye-full"></div></div><div class="ml-body"><button class="ml-mainbtn" id="ml-display">Display lister</button><div class="ml-short">Alt + D</div><button class="ml-mainbtn" id="ml-show">Show list</button><div class="ml-short">Alt + S</div><button class="ml-mainbtn" id="ml-add">Add lister</button><div class="ml-short">Alt + A</div><button class="ml-mainbtn" id="ml-newlist">Make New list</button><div class="ml-short">Alt + M</div><button class="ml-mainbtn" id="ml-help">Help</button><div class="ml-discord">Discord: Eclipsa1234</div><div class="ml-version">v${VERSION} test</div></div></div>
+  <div class="ml-panel ml-hidden" id="ml-panel"><div class="ml-head ml-drag" id="ml-head"><div class="ml-head-icons"><img class="ml-col" src="${ICON_COL}"><img class="ml-mark" src="${ICON_MARK}"></div><span class="ml-title ml-title-toggle" id="ml-title-full">Marklister</span><div class="ml-eye" id="ml-eye-full"></div></div><div class="ml-body"><div class="ml-owner-name waiting" id="ml-owner-name">User: Waiting for game...</div><button class="ml-mainbtn" id="ml-display">Display lister</button><div class="ml-short">Alt + D</div><button class="ml-mainbtn" id="ml-show">Show list</button><div class="ml-short">Alt + S</div><button class="ml-mainbtn" id="ml-add">Add lister</button><div class="ml-short">Alt + A</div><button class="ml-mainbtn" id="ml-newlist">Make New list</button><div class="ml-short">Alt + M</div><button class="ml-mainbtn" id="ml-help">Help</button><div class="ml-discord">Discord: Eclipsa1234</div><div class="ml-version">v${VERSION} test</div></div></div>
   <div class="ml-compact ml-drag" id="ml-compact"><img class="ml-mark" src="${ICON_MARK}"><span class="ml-title ml-title-toggle" id="ml-title-compact">Marklister</span><div class="ml-eye" id="ml-eye-compact"></div></div>
   <div class="ml-tiny ml-hidden ml-drag" id="ml-tiny"><img class="ml-mark" src="${ICON_MARK}"><div class="ml-eye" id="ml-eye-tiny"></div></div>
   <div class="ml-listpanel ml-hidden" id="ml-list"><div class="ml-list-handle"></div><div id="ml-list-body"></div></div>`;
@@ -876,7 +927,7 @@ function toggleUiVisibility(){if(S.uiMode==='tiny'){S.uiMode=S.restoreUiMode||'c
 function toggleDisplay(){S.displayEnabled=!S.displayEnabled;renderUiState()}
 function applySavedPosition(){if(!S.root)return;const p=S.position;if(p&&Number.isFinite(p.x)&&Number.isFinite(p.y)){S.root.style.right='auto';S.root.style.left=Math.max(0,Math.min(innerWidth-70,p.x))+'px';S.root.style.top=Math.max(0,Math.min(innerHeight-40,p.y))+'px'}}
 function installDrag(handle){handle.addEventListener('pointerdown',e=>{if(e.button!==0||e.target.closest('.ml-title-toggle,.ml-eye,.ml-mainbtn,button,input,textarea'))return;const r=S.root.getBoundingClientRect();S.drag={id:e.pointerId,sx:e.clientX,sy:e.clientY,left:r.left,top:r.top,moved:false};handle.setPointerCapture?.(e.pointerId);handle.classList.add('dragging')});handle.addEventListener('pointermove',e=>{const d=S.drag;if(!d||d.id!==e.pointerId)return;const dx=e.clientX-d.sx,dy=e.clientY-d.sy;if(Math.hypot(dx,dy)>4)d.moved=true;const x=Math.max(0,Math.min(innerWidth-60,d.left+dx)),y=Math.max(0,Math.min(innerHeight-34,d.top+dy));S.root.style.right='auto';S.root.style.left=x+'px';S.root.style.top=y+'px'});handle.addEventListener('pointerup',e=>{const d=S.drag;if(!d||d.id!==e.pointerId)return;handle.classList.remove('dragging');if(d.moved){S.suppressTitleClickUntil=performance.now()+250;const r=S.root.getBoundingClientRect();S.position={x:r.left,y:r.top};GM_setValue('marklister_pos',S.position)}S.drag=null})}
-function renderUiState(){S.panel.classList.toggle('ml-hidden',S.uiMode!=='full');S.compact.classList.toggle('ml-hidden',S.uiMode!=='compact');S.tiny.classList.toggle('ml-hidden',S.uiMode!=='tiny');const sideVisible=S.uiMode==='full'&&!!S.sideMode;S.listPanel.classList.toggle('ml-hidden',!sideVisible);const eye=eyeSvg(S.uiMode!=='tiny');for(const id of ['ml-eye-full','ml-eye-compact','ml-eye-tiny']){const e=document.getElementById(id);e.innerHTML=eye}document.getElementById('ml-display').classList.toggle('active',S.sideMode==='display');document.getElementById('ml-show').classList.toggle('active',String(S.sideMode||'').startsWith('show'));if(sideVisible)renderSidePanel();persistUiState();if(S.uiMode==='full'&&S.ownerConfirmed&&Date.now()-S.lastSyncAt>30000)bootstrap(false);refreshActivity(true)}
+function renderUiState(){updateOwnerLabel();S.panel.classList.toggle('ml-hidden',S.uiMode!=='full');S.compact.classList.toggle('ml-hidden',S.uiMode!=='compact');S.tiny.classList.toggle('ml-hidden',S.uiMode!=='tiny');const sideVisible=S.uiMode==='full'&&!!S.sideMode;S.listPanel.classList.toggle('ml-hidden',!sideVisible);const eye=eyeSvg(S.uiMode!=='tiny');for(const id of ['ml-eye-full','ml-eye-compact','ml-eye-tiny']){const e=document.getElementById(id);e.innerHTML=eye}document.getElementById('ml-display').classList.toggle('active',S.sideMode==='display');document.getElementById('ml-show').classList.toggle('active',String(S.sideMode||'').startsWith('show'));if(sideVisible)renderSidePanel();persistUiState();if(S.uiMode==='full'&&S.ownerConfirmed&&Date.now()-S.lastSyncAt>30000)bootstrap(false);refreshActivity(true)}
 function openSide(mode){if(S.uiMode!=='full')S.uiMode='full';S.sideMode=S.sideMode===mode?null:mode;if(mode==='show-lists')S.selectedListId=null;renderUiState()}
 function renderSidePanel(){const body=document.getElementById('ml-list-body');if(!body)return;body.innerHTML='';if(S.sideMode==='display'){const addRow=(label,on,click)=>{const r=document.createElement('div');r.className='ml-side-row';r.innerHTML=`<span class="grow">${esc(label)}</span><span class="ml-check ${on?'on':''}"></span>`;r.onclick=click;body.appendChild(r)};addRow('Display all',S.displayAll,()=>{S.displayAll=!S.displayAll;if(S.displayAll)S.displayedListIds.clear();rebuildDisplayMap();renderSidePanel()});for(const l of S.lists)addRow(l.name,S.displayAll||S.displayedListIds.has(Number(l.id)),()=>{S.displayAll=false;const id=Number(l.id);if(S.displayedListIds.has(id))S.displayedListIds.delete(id);else S.displayedListIds.add(id);rebuildDisplayMap();renderSidePanel()});return}
   if(S.sideMode==='show-items'&&S.selectedListId){const l=listById(S.selectedListId);if(!l){S.sideMode='show-lists';return renderSidePanel()}const title=document.createElement('div');title.className='ml-list-title';title.innerHTML=`<span>${esc(l.name)}</span><span class="ml-color-box ${l.is_default?'locked':''}" style="background:${esc(l.color)}"></span>`;body.appendChild(title);const entries=S.entries.filter(x=>Number(x.list_id)===Number(l.id));if(!entries.length)body.innerHTML+=`<div style="color:#ddd;font-weight:700;padding:6px">empty</div>`;for(const item of entries){const d=document.createElement('div');d.className='ml-entry';d.innerHTML=`<div class="ml-entry-name">${esc(item.name)}</div><div class="ml-entry-reason">Reason : ${esc(item.reason||'blank')}</div><div class="ml-entry-actions"><button title="delete">🗑</button><button title="edit">✎</button></div>`;const [del,edit]=d.querySelectorAll('button');del.onclick=e=>{e.stopPropagation();if(confirm('Delete '+item.name+'?'))deleteEntry(item.id)};edit.onclick=e=>{e.stopPropagation();openEdit(item)};body.appendChild(d)}const back=document.createElement('button');back.className='ml-cancel';back.textContent='Back';back.onclick=()=>{S.sideMode='show-lists';S.selectedListId=null;renderSidePanel()};body.appendChild(back);return}
@@ -988,9 +1039,9 @@ async function openDeveloperMode(){
     m.querySelector('#mdevclose').onclick=closeModal;
   }catch(e){alert('Developer mode failed: '+e.message)}
 }
-function registerMenu(){GM_registerMenuCommand('Marklister: 새로고침',()=>bootstrap(true));GM_registerMenuCommand('Marklister: 사용자 인식 초기화',()=>{GM_setValue('marklister_owner','');S.ownerName='';S.ownerConfirmed=false;S.selfHud=null;S.labelCapture.selfHud=null;S.ownerCandidate=null;alert('Owner lock cleared. Reload florr.io.');});GM_registerMenuCommand('Marklister: 개발자 모드',openDeveloperMode);GM_registerMenuCommand('Marklister: 개발자 페이지',()=>{const u=DEFAULT_SERVER_URL+'/admin';if(typeof GM_openInTab==='function')GM_openInTab(u,{active:true,insert:true});else window.open(u,'_blank')})}
+function registerMenu(){GM_registerMenuCommand('Marklister: 새로고침',()=>bootstrap(true));GM_registerMenuCommand('Marklister: 사용자 인식 초기화',()=>{GM_setValue('marklister_owner','');S.ownerName='';S.ownerConfirmed=false;S.selfHud=null;S.labelCapture.selfHud=null;S.ownerCandidate=null;S.nameDetectActive=false;S.nameDetectStartedAt=0;S.nameDetectEvidence='';S.nameDetectErrorShown=false;S.bugRejectCount=0;updateOwnerLabel();alert('Owner lock cleared. Marklister will detect again after you enter the game.');});GM_registerMenuCommand('Marklister: 개발자 모드',openDeveloperMode);GM_registerMenuCommand('Marklister: 개발자 페이지',()=>{const u=DEFAULT_SERVER_URL+'/admin';if(typeof GM_openInTab==='function')GM_openInTab(u,{active:true,insert:true});else window.open(u,'_blank')})}
 
 function installGlobalErrorCapture(){const ours=v=>{const s=String(v||'').toLowerCase();return s.includes('marklister')||s.includes('userscript')};window.addEventListener('error',e=>{const st=e?.error?.stack||e?.filename||'';if(e?.error&&ours(st))showError('UNCAUGHT_ERROR',e.error.message||e.message,{stage:'UNCAUGHT',error:e.error,stack:e.error.stack||''})});window.addEventListener('unhandledrejection',e=>{const r=e.reason,st=r?.stack||'';if(ours(st))showError('UNHANDLED_REJECTION',r?.message||String(r),{stage:'UNHANDLED_REJECTION',error:r instanceof Error?r:null,stack:st})})}
-function start(){S.nameDetectStartedAt=Date.now();installFlorrkitHitboxBridge();createUI();installInputShield();installCanvasCapture();installKeys();installGlobalErrorCapture();registerMenu();refreshBugWords();refreshActivity(true)}
+function start(){S.nameDetectActive=false;S.nameDetectStartedAt=0;installFlorrkitHitboxBridge();createUI();installInputShield();installCanvasCapture();installKeys();installGlobalErrorCapture();registerMenu();refreshBugWords();refreshActivity(true)}
 start();
 })();
