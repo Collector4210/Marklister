@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Marklister for florr.io
 // @namespace    marklister.florr.public
-// @version      1.5.3
+// @version      1.5.4
 // @updateURL    https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
 // @downloadURL  https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
 // @description  Marklister v1.5 test: multiple custom lists, list colors, move, persistent display selection, safer UI cancellation, error reports, Bug Words, and low-load tracking.
@@ -21,7 +21,7 @@
 (() => {
 'use strict';
 const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-const VERSION = '1.5.3-test';
+const VERSION = '1.5.4-test';
 const DEFAULT_SERVER_URL = 'https://marklister-server.starcofan.workers.dev';
 const CLIENT_TOKEN_KEY = 'marklister_client_token_v1';
 const UI_STATE_KEY = 'marklister_ui_state_v1';
@@ -59,6 +59,7 @@ const S = {
   serverUrl: DEFAULT_SERVER_URL,
   clientToken: '',
   ownerName: '', // detect fresh every page load; never trust stale owner saved by older buggy builds
+  ownerDetectionGeneration: 0,
   ownerCandidate: null,
   ownerConfirmed: false,
   selfHud: null,
@@ -137,7 +138,7 @@ function defaultList(){return S.lists.find(x=>x.is_default)||S.lists[0]||null}
 function listById(id){return S.lists.find(x=>Number(x.id)===Number(id))||null}
 function randomUnusedColor(){const palette=['#ff1a1a','#13aee8','#fff119','#7ee842','#e865d9','#a470ff','#ff8c22','#25d7be','#f45d75','#67a6ff','#d0e64a','#ffba65'];const used=new Set(S.lists.map(x=>String(x.color||'').toLowerCase()));const free=palette.filter(x=>!used.has(x.toLowerCase())&&x.toLowerCase()!==DEFAULT_LIST_COLOR);return free.length?free[Math.floor(Math.random()*free.length)]:('#'+Math.floor(Math.random()*0xffffff).toString(16).padStart(6,'0'))}
 function rebuildDisplayMap(){const chosen=S.displayAll?new Set(S.lists.map(x=>Number(x.id))):S.displayedListIds;S.listMap=new Map();for(const e of S.entries){if(chosen.has(Number(e.list_id)))S.listMap.set(String(e.name||'').toLowerCase(),e)}S.list=[...S.listMap.values()];S.displayEnabled=S.listMap.size>0;saveV15State();refreshActivity(true)}
-function applyPayload(d){S.lists=Array.isArray(d.lists)?d.lists:[];S.entries=Array.isArray(d.entries)?d.entries:(Array.isArray(d.items)?d.items:[]);const valid=new Set(S.lists.map(x=>Number(x.id)));S.displayedListIds=new Set([...S.displayedListIds].filter(id=>valid.has(Number(id))));if(!S.displayAll&&S.displayedListIds.size===0){const def=defaultList();if(def)S.displayedListIds.add(Number(def.id))}if(!S.addListId||!valid.has(Number(S.addListId))){const def=defaultList();S.addListId=def?Number(def.id):null}rebuildDisplayMap();if(S.uiMode==='full'&&S.sideMode)renderSidePanel()}
+function applyPayload(d){if(!S.ownerConfirmed||(d.user&&d.user!==S.ownerName))return;S.lists=Array.isArray(d.lists)?d.lists:[];S.entries=Array.isArray(d.entries)?d.entries:(Array.isArray(d.items)?d.items:[]);const valid=new Set(S.lists.map(x=>Number(x.id)));S.displayedListIds=new Set([...S.displayedListIds].filter(id=>valid.has(Number(id))));if(!S.displayAll&&S.displayedListIds.size===0){const def=defaultList();if(def)S.displayedListIds.add(Number(def.id))}if(!S.addListId||!valid.has(Number(S.addListId))){const def=defaultList();S.addListId=def?Number(def.id):null}rebuildDisplayMap();if(S.uiMode==='full'&&S.sideMode)renderSidePanel()}
 function selectedColorForName(name){const e=S.listMap.get(String(name||'').toLowerCase());return e?.list_color||listById(e?.list_id)?.color||DEFAULT_LIST_COLOR}
 function hexToRgba(hex,a){const m=/^#([0-9a-f]{6})$/i.exec(String(hex||''));if(!m)return `rgba(255,26,26,${a})`;const n=parseInt(m[1],16),r=(n>>16)&255,g=(n>>8)&255,b=n&255;return `rgba(${r},${g},${b},${a})`}
 function closeColorPalette(){
@@ -410,6 +411,50 @@ function updateOwnerLabel(){
     el.className='ml-owner-name waiting';
   }
 }
+function restartOwnerDetection(){
+  S.ownerDetectionGeneration++;
+  S.bootstrapPromise=null;
+  S.lastSyncAt=0;
+  S.ownerName='';
+  S.ownerConfirmed=false;
+  S.ownerCandidate=null;
+  S.selfHud=null;
+  S.nameDetectActive=false;
+  S.nameDetectStartedAt=0;
+  S.nameDetectEvidence='';
+  S.nameDetectErrorShown=false;
+  S.bugRejectCount=0;
+  GM_setValue('marklister_owner','');
+  const cap=S.labelCapture;
+  cap.selfHud=null;
+  cap.topLeftRecent.length=0;
+  cap.recent.length=0;
+  cap.labels.clear();
+  cap.lastEventKey='';
+  cap.lastEventAt=0;
+  S.hitboxBridge.objects.clear();
+  S.hitboxBridge.texts.clear();
+  S.hitboxBridge.activeTextKey=0;
+  S.hitboxBridge.activeTextBuffer=null;
+  S.hitboxBridge.activeTextRejected=false;
+  S.selectionMode=false;
+  S.selectedName=null;
+  S.selectedListId=null;
+  S.addListId=null;
+  S.lists=[];
+  S.entries=[];
+  S.list=[];
+  S.listMap.clear();
+  if(S.sideMode==='show-items')S.sideMode='show-lists';
+  closeColorPalette();
+  closeModal();
+  document.querySelector('.ml-error-bg')?.remove();
+  S.errorOpen=false;
+  updateOwnerLabel();
+  if(S.sideMode)renderSidePanel();
+  refreshActivity(true);
+}
+
 function activateSelfNameDetection(reason){
   if(S.ownerConfirmed||S.nameDetectActive)return;
   S.nameDetectActive=true;
@@ -844,15 +889,19 @@ async function bootstrap(force=false){
   if(S.bootstrapPromise)return S.bootstrapPromise;
   if(!force&&Date.now()-S.lastSyncAt<2500)return;
   S.lastSyncAt=Date.now();
+  const generation=S.ownerDetectionGeneration;
   const endpoint='/api/bootstrap?user='+encodeURIComponent(S.ownerName);
   S.bootstrapPromise=(async()=>{
     let lastError=null;
     for(let attempt=1;attempt<=2;attempt++){
+      if(generation!==S.ownerDetectionGeneration)return null;
       try{
         const d=await api(endpoint,'GET',null,{}, {timeoutMs:attempt===1?20000:25000,stage:'BOOT_FETCH'});
+        if(generation!==S.ownerDetectionGeneration)return null;
         applyPayload(d);
         return d;
       }catch(e){
+        if(generation!==S.ownerDetectionGeneration)return null;
         lastError=e;
         const transient=e?.code==='TIMEOUT'||e?.code==='NETWORK_ERROR';
         if(attempt===1&&transient){await new Promise(r=>setTimeout(r,700));continue}
@@ -870,7 +919,7 @@ async function bootstrap(force=false){
     }
     if(lastError)throw lastError;
     return null;
-  })().finally(()=>{S.bootstrapPromise=null});
+  })().finally(()=>{if(generation===S.ownerDetectionGeneration)S.bootstrapPromise=null});
   return S.bootstrapPromise;
 }
 function setList(items){S.entries=Array.isArray(items)?items:[];rebuildDisplayMap()}
@@ -902,12 +951,15 @@ async function deleteList(id){const l=listById(id);if(!l||l.is_default)return;if
 function createUI(){
   GM_addStyle(CSS);
   const root=document.createElement('div');root.id='ml-root';root.innerHTML=`
-  <div class="ml-panel ml-hidden" id="ml-panel"><div class="ml-head ml-drag" id="ml-head"><div class="ml-head-icons"><img class="ml-col" src="${ICON_COL}"><img class="ml-mark" src="${ICON_MARK}"></div><span class="ml-title ml-title-toggle" id="ml-title-full">Marklister</span><div class="ml-eye" id="ml-eye-full"></div></div><div class="ml-body"><div class="ml-owner-name waiting" id="ml-owner-name">User: Waiting for game...</div><button class="ml-mainbtn" id="ml-display">Display lister</button><div class="ml-short">Alt + D</div><button class="ml-mainbtn" id="ml-show">Show list</button><div class="ml-short">Alt + S</div><button class="ml-mainbtn" id="ml-add">Add lister</button><div class="ml-short">Alt + A</div><button class="ml-mainbtn" id="ml-newlist">Make New list</button><div class="ml-short">Alt + M</div><button class="ml-mainbtn" id="ml-help">Help</button><div class="ml-discord">Discord: Eclipsa1234</div><div class="ml-version">v${VERSION} test</div></div></div>
+  <div class="ml-panel ml-hidden" id="ml-panel"><div class="ml-head ml-drag" id="ml-head"><div class="ml-head-icons"><img class="ml-col" src="${ICON_COL}"><img class="ml-mark" src="${ICON_MARK}"></div><span class="ml-title ml-title-toggle" id="ml-title-full">Marklister</span><div class="ml-eye" id="ml-eye-full"></div></div><div class="ml-body"><div class="ml-owner-name waiting" id="ml-owner-name" role="button" tabindex="0" title="Click to detect your username again" style="cursor:pointer">User: Waiting for game...</div><button class="ml-mainbtn" id="ml-display">Display lister</button><div class="ml-short">Alt + D</div><button class="ml-mainbtn" id="ml-show">Show list</button><div class="ml-short">Alt + S</div><button class="ml-mainbtn" id="ml-add">Add lister</button><div class="ml-short">Alt + A</div><button class="ml-mainbtn" id="ml-newlist">Make New list</button><div class="ml-short">Alt + M</div><button class="ml-mainbtn" id="ml-help">Help</button><div class="ml-discord">Discord: Eclipsa1234</div><div class="ml-version">v${VERSION} test</div></div></div>
   <div class="ml-compact ml-drag" id="ml-compact"><img class="ml-mark" src="${ICON_MARK}"><span class="ml-title ml-title-toggle" id="ml-title-compact">Marklister</span><div class="ml-eye" id="ml-eye-compact"></div></div>
   <div class="ml-tiny ml-hidden ml-drag" id="ml-tiny"><img class="ml-mark" src="${ICON_MARK}"><div class="ml-eye" id="ml-eye-tiny"></div></div>
   <div class="ml-listpanel ml-hidden" id="ml-list"><div class="ml-list-handle"></div><div id="ml-list-body"></div></div>`;
   document.documentElement.appendChild(root);const overlay=document.createElement('div');overlay.id='ml-overlay';document.documentElement.appendChild(overlay);S.root=root;S.panel=root.querySelector('#ml-panel');S.compact=root.querySelector('#ml-compact');S.tiny=root.querySelector('#ml-tiny');S.listPanel=root.querySelector('#ml-list');S.overlay=overlay;
   root.querySelector('#ml-title-full').onclick=e=>{e.preventDefault();e.stopPropagation();if(performance.now()<S.suppressTitleClickUntil)return;setUiMode('compact')};root.querySelector('#ml-title-compact').onclick=e=>{e.preventDefault();e.stopPropagation();if(performance.now()<S.suppressTitleClickUntil)return;setUiMode('full')};for(const id of ['#ml-eye-full','#ml-eye-compact','#ml-eye-tiny'])root.querySelector(id).onclick=e=>{e.preventDefault();e.stopPropagation();toggleUiVisibility()};
+  const ownerLabel=root.querySelector('#ml-owner-name');
+  ownerLabel.onclick=e=>{e.preventDefault();e.stopPropagation();restartOwnerDetection()};
+  ownerLabel.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();restartOwnerDetection()}};
   root.querySelector('#ml-display').onclick=e=>{e.preventDefault();e.stopPropagation();openSide('display')};root.querySelector('#ml-show').onclick=()=>openSide('show-lists');root.querySelector('#ml-add').onclick=openAddChoice;root.querySelector('#ml-newlist').onclick=openNewList;root.querySelector('#ml-help').onclick=openHelp;
   installDrag(root.querySelector('#ml-head'));installDrag(root.querySelector('#ml-compact'));installDrag(root.querySelector('#ml-tiny'));applySavedPosition();renderUiState();
 }
@@ -1039,7 +1091,7 @@ async function openDeveloperMode(){
     m.querySelector('#mdevclose').onclick=closeModal;
   }catch(e){alert('Developer mode failed: '+e.message)}
 }
-function registerMenu(){GM_registerMenuCommand('Marklister: 새로고침',()=>bootstrap(true));GM_registerMenuCommand('Marklister: 사용자 인식 초기화',()=>{GM_setValue('marklister_owner','');S.ownerName='';S.ownerConfirmed=false;S.selfHud=null;S.labelCapture.selfHud=null;S.ownerCandidate=null;S.nameDetectActive=false;S.nameDetectStartedAt=0;S.nameDetectEvidence='';S.nameDetectErrorShown=false;S.bugRejectCount=0;updateOwnerLabel();alert('Owner lock cleared. Marklister will detect again after you enter the game.');});GM_registerMenuCommand('Marklister: 개발자 모드',openDeveloperMode);GM_registerMenuCommand('Marklister: 개발자 페이지',()=>{const u=DEFAULT_SERVER_URL+'/admin';if(typeof GM_openInTab==='function')GM_openInTab(u,{active:true,insert:true});else window.open(u,'_blank')})}
+function registerMenu(){GM_registerMenuCommand('Marklister: 새로고침',()=>bootstrap(true));GM_registerMenuCommand('Marklister: 사용자 인식 초기화',restartOwnerDetection);GM_registerMenuCommand('Marklister: 개발자 모드',openDeveloperMode);GM_registerMenuCommand('Marklister: 개발자 페이지',()=>{const u=DEFAULT_SERVER_URL+'/admin';if(typeof GM_openInTab==='function')GM_openInTab(u,{active:true,insert:true});else window.open(u,'_blank')})}
 
 function installGlobalErrorCapture(){const ours=v=>{const s=String(v||'').toLowerCase();return s.includes('marklister')||s.includes('userscript')};window.addEventListener('error',e=>{const st=e?.error?.stack||e?.filename||'';if(e?.error&&ours(st))showError('UNCAUGHT_ERROR',e.error.message||e.message,{stage:'UNCAUGHT',error:e.error,stack:e.error.stack||''})});window.addEventListener('unhandledrejection',e=>{const r=e.reason,st=r?.stack||'';if(ours(st))showError('UNHANDLED_REJECTION',r?.message||String(r),{stage:'UNHANDLED_REJECTION',error:r instanceof Error?r:null,stack:st})})}
 function start(){S.nameDetectActive=false;S.nameDetectStartedAt=0;installFlorrkitHitboxBridge();createUI();installInputShield();installCanvasCapture();installKeys();installGlobalErrorCapture();registerMenu();refreshBugWords();refreshActivity(true)}
