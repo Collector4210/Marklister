@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Marklister for florr.io
 // @namespace    marklister.florr.public
-// @version      1.5.0
+// @version      1.5.1
 // @updateURL    https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
 // @downloadURL  https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
 // @description  Marklister v1.5 test: multiple custom lists, list colors, move, persistent display selection, safer UI cancellation, error reports, Bug Words, and low-load tracking.
@@ -21,7 +21,7 @@
 (() => {
 'use strict';
 const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-const VERSION = '1.5.0';
+const VERSION = '1.5.1-test';
 const DEFAULT_SERVER_URL = 'https://marklister-server.starcofan.workers.dev';
 const CLIENT_TOKEN_KEY = 'marklister_client_token_v1';
 const UI_STATE_KEY = 'marklister_ui_state_v1';
@@ -82,7 +82,7 @@ const S = {
   showList: typeof SAVED_UI.showList==='boolean' ? SAVED_UI.showList : false,
   selectionMode: false, selectedName: null,
   root: null, panel: null, compact: null, tiny: null, listPanel: null, overlay: null, modal: null, hint: null,
-  lastSyncAt: 0, syncTimer: null, overlayTimer: null, hooked: false,
+  lastSyncAt: 0, syncTimer: null, overlayTimer: null, hooked: false, bootstrapPromise: null,
   addBusy: false,
   position: GM_getValue('marklister_pos', null),
   gameCanvas: null,
@@ -109,7 +109,7 @@ const CSS = `
 .ml-listpanel{position:absolute;right:calc(100% + 7px);top:20px;width:245px;min-height:300px;max-height:440px;border-radius:9px;padding:10px 8px 8px;overflow:auto}.ml-list-handle{width:48px;height:4px;background:#504d4e;border-radius:2px;margin:0 auto 10px}.ml-entry{background:#918c8e;border-radius:4px;padding:7px 40px 7px 8px;margin:7px 0;position:relative;min-height:42px}.ml-entry-name{font-size:16px;font-weight:800}.ml-entry-reason{font-size:13px;font-weight:700;color:#ddd;margin-top:2px}.ml-entry-actions{position:absolute;right:5px;top:5px;display:flex;flex-direction:column;gap:2px}.ml-entry-actions button{width:25px;height:22px;border:0;background:transparent;color:#111;font-size:17px;cursor:pointer;padding:0}
 .ml-modal-bg{position:fixed;inset:0;z-index:1000002;background:transparent;display:flex;align-items:center;justify-content:center}.ml-modal{min-width:340px;max-width:510px;background:#777174;border:3px solid #3d3b3d;border-radius:9px;padding:10px;box-shadow:0 6px 18px rgba(0,0,0,.32)}.ml-modal-title{text-align:center;font-size:23px;font-weight:900;margin-bottom:9px}.ml-choices{display:flex;gap:18px}.ml-choice{flex:1;height:78px;border:0;border-radius:4px;background:#8d888a;color:#e6e2e3;font-size:20px;font-weight:900;cursor:pointer}.ml-field-label{font-size:15px;font-weight:800;margin:1px 0 2px}.ml-row{display:flex;gap:7px}.ml-input,.ml-textarea{width:100%;box-sizing:border-box;border:0;border-radius:2px;background:#8d888a;color:#fff;font-size:18px;font-weight:700;padding:7px 8px;outline:none}.ml-textarea{height:52px;resize:none}.ml-addbtn{width:66px;border:0;border-radius:2px;background:#8d888a;color:#fff;font-size:18px;font-weight:900;cursor:pointer}.ml-sp{height:6px}.ml-cancel{margin-top:7px;border:0;border-radius:3px;background:#625e60;color:#ddd;padding:6px 10px;cursor:pointer}
 #ml-overlay{position:fixed;inset:0;z-index:999999;pointer-events:none}.ml-ring{position:fixed;border-radius:50%;transform:translate(-50%,-50%);box-sizing:border-box;pointer-events:none}.ml-ring.blue{background:rgba(78,153,229,.16);border:3px solid rgba(78,153,229,.72)}.ml-ring.red{background:rgba(255,84,47,.30);border:3px solid rgba(236,79,50,.66)}.ml-hit-target{position:fixed;transform:translate(-50%,-50%);border-radius:50%;pointer-events:auto;cursor:pointer;background:transparent}.ml-hint{position:fixed;left:50%;top:30px;transform:translateX(-50%);background:rgba(0,70,45,.86);border-radius:6px;padding:6px 15px;color:#fff;font-size:24px;font-weight:900;pointer-events:none}.ml-line{position:fixed;height:2px;background:#d64236;transform-origin:left center;pointer-events:none}.ml-badge{position:fixed;background:#d24c40;color:#fff;border-radius:2px;padding:2px 6px 4px;min-width:78px;font-weight:900;pointer-events:none}.ml-badge .small{font-size:14px;line-height:1}.ml-badge .big{font-size:18px;line-height:1.1}.ml-target-name{position:fixed;transform:translate(-50%,-100%);padding:2px 6px;background:rgba(73,142,210,.88);border:1px solid rgba(36,91,145,.85);border-radius:3px;color:#0b1d2c;font-size:15px;font-weight:900;line-height:1.15;white-space:nowrap;pointer-events:none;text-shadow:none}
-.ml-side-row{display:flex;align-items:center;gap:8px;background:#918c8e;border-radius:4px;padding:8px;margin:7px 0;font-size:18px;font-weight:900}.ml-side-row .grow{flex:1}.ml-color-box{width:27px;height:27px;border:3px solid #494647;display:inline-block;flex:0 0 auto;cursor:pointer}.ml-color-box.locked{cursor:not-allowed}.ml-side-icon{width:25px;height:25px;border:0;background:transparent;font-size:18px;cursor:pointer;padding:0}.ml-list-title{display:flex;align-items:center;justify-content:center;gap:9px;font-size:22px;font-weight:900;margin:3px 0 8px}.ml-check{width:24px;height:24px;border:3px solid #514e4f;background:transparent;display:flex;align-items:center;justify-content:center;font-size:18px}.ml-check.on::after{content:'✓';font-weight:900;color:#fff}.ml-list-selectors{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px;min-height:38px}.ml-list-swatch-wrap{position:relative;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%}.ml-list-swatch-wrap.selected{outline:4px solid #ff1717;outline-offset:2px}.ml-list-swatch{width:25px;height:25px;border:3px solid #494647;cursor:pointer}.ml-list-tooltip{position:absolute;bottom:34px;left:50%;transform:translateX(-50%);display:none;background:#aaa6a8;color:#fff;padding:3px 8px;border-radius:3px;font-weight:900;white-space:nowrap}.ml-list-swatch-wrap:hover .ml-list-tooltip{display:block}.ml-move-popup{position:absolute;z-index:4;left:50%;top:50%;transform:translate(-50%,-50%);background:#777174;border:3px solid #3d3b3d;border-radius:8px;padding:10px;min-width:245px;box-shadow:0 6px 18px rgba(0,0,0,.3)}.ml-move-row{display:flex;align-items:center;gap:10px;background:#918c8e;border-radius:4px;padding:7px;margin:7px 0;font-weight:900;font-size:18px}.ml-move-row span{flex:1}.ml-error-bg{position:fixed;inset:0;z-index:1000010;background:rgba(0,0,0,.06);display:flex;align-items:center;justify-content:center}.ml-error-box{position:relative;width:min(500px,90vw);background:#777174;border:3px solid #3d3b3d;border-radius:10px;padding:16px;box-shadow:0 6px 18px rgba(0,0,0,.3);text-align:center}.ml-error-title{font-size:27px;font-weight:900}.ml-error-msg{font-size:18px;font-weight:800;margin:8px auto;max-width:410px}.ml-error-close{position:absolute;right:7px;top:7px;border:3px solid #3d3b3d;border-radius:6px;background:#999;color:red;font-size:22px;font-weight:900;line-height:1;padding:3px 6px}.ml-error-copy{position:absolute;right:24px;top:145px;border:2px solid #3d3b3d;border-radius:4px;background:#aaa6a8;width:24px;height:24px}.ml-error-copy::after{content:'Copy error code';position:absolute;right:-75px;top:27px;background:#aaa6a8;color:white;padding:3px 8px;border-radius:3px;white-space:nowrap;font-weight:900;display:none}.ml-error-copy:hover::after{display:block}.ml-error-code{margin-top:34px;background:#6a6668;border-radius:5px;min-height:95px;max-height:180px;overflow:auto;text-align:left;white-space:pre-wrap;word-break:break-word;padding:8px;color:#ddd;font:12px Consolas,monospace;user-select:text}.ml-palette-hidden{position:fixed;opacity:0;pointer-events:none;width:1px;height:1px}
+.ml-side-row{display:flex;align-items:center;gap:8px;background:#918c8e;border-radius:4px;padding:8px;margin:7px 0;font-size:18px;font-weight:900}.ml-side-row .grow{flex:1}.ml-color-box{width:27px;height:27px;border:3px solid #494647;display:inline-block;flex:0 0 auto;cursor:pointer}.ml-color-box.locked{cursor:not-allowed}.ml-side-icon{width:25px;height:25px;border:0;background:transparent;font-size:18px;cursor:pointer;padding:0}.ml-list-title{display:flex;align-items:center;justify-content:center;gap:9px;font-size:22px;font-weight:900;margin:3px 0 8px}.ml-check{width:24px;height:24px;border:3px solid #514e4f;background:transparent;display:flex;align-items:center;justify-content:center;font-size:18px}.ml-check.on::after{content:'✓';font-weight:900;color:#fff}.ml-list-selectors{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px;min-height:38px}.ml-list-swatch-wrap{position:relative;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%}.ml-list-swatch-wrap.selected{outline:4px solid #ff1717;outline-offset:2px}.ml-list-swatch{width:25px;height:25px;border:3px solid #494647;cursor:pointer}.ml-list-tooltip{position:absolute;bottom:34px;left:50%;transform:translateX(-50%);display:none;background:#aaa6a8;color:#fff;padding:3px 8px;border-radius:3px;font-weight:900;white-space:nowrap}.ml-list-swatch-wrap:hover .ml-list-tooltip{display:block}.ml-move-popup{position:absolute;z-index:4;left:50%;top:50%;transform:translate(-50%,-50%);background:#777174;border:3px solid #3d3b3d;border-radius:8px;padding:10px;min-width:245px;box-shadow:0 6px 18px rgba(0,0,0,.3)}.ml-move-row{display:flex;align-items:center;gap:10px;background:#918c8e;border-radius:4px;padding:7px;margin:7px 0;font-weight:900;font-size:18px}.ml-move-row span{flex:1}.ml-error-bg{position:fixed;inset:0;z-index:1000010;background:rgba(0,0,0,.06);display:flex;align-items:center;justify-content:center}.ml-error-box{position:relative;width:min(720px,92vw);background:#777174;border:3px solid #3d3b3d;border-radius:10px;padding:16px;box-shadow:0 6px 18px rgba(0,0,0,.3);text-align:center}.ml-error-title{font-size:27px;font-weight:900}.ml-error-msg{font-size:18px;font-weight:800;margin:8px auto;max-width:410px}.ml-error-close{position:absolute;right:7px;top:7px;border:3px solid #3d3b3d;border-radius:6px;background:#999;color:red;font-size:22px;font-weight:900;line-height:1;padding:3px 6px}.ml-error-copy{position:absolute;right:24px;top:145px;border:2px solid #3d3b3d;border-radius:4px;background:#aaa6a8;width:24px;height:24px}.ml-error-copy::after{content:'Copy error code';position:absolute;right:-75px;top:27px;background:#aaa6a8;color:white;padding:3px 8px;border-radius:3px;white-space:nowrap;font-weight:900;display:none}.ml-error-copy:hover::after{display:block}.ml-error-code{margin-top:34px;background:#6a6668;border-radius:5px;min-height:95px;max-height:360px;overflow:auto;text-align:left;white-space:pre-wrap;word-break:break-word;padding:8px;color:#ddd;font:12px Consolas,monospace;user-select:text}.ml-palette-hidden{position:fixed;opacity:0;pointer-events:none;width:1px;height:1px}
 
 `;
 
@@ -127,7 +127,63 @@ function hexToRgba(hex,a){const m=/^#([0-9a-f]{6})$/i.exec(String(hex||''));if(!
 function chooseColor(initial,onPick){const i=document.createElement('input');i.type='color';i.value=/^#[0-9a-f]{6}$/i.test(initial||'')?initial:'#13aee8';i.className='ml-palette-hidden';document.documentElement.appendChild(i);i.oninput=()=>{onPick(i.value);i.remove()};i.onchange=()=>{if(i.isConnected){onPick(i.value);i.remove()}};i.onblur=()=>setTimeout(()=>i.remove(),120);i.click()}
 function listSelectorHtml(selectedId){return '<div class="ml-list-selectors">'+S.lists.map(l=>`<div class="ml-list-swatch-wrap ${Number(l.id)===Number(selectedId)?'selected':''}" data-list-id="${l.id}"><div class="ml-list-tooltip">${esc(l.name)}</div><div class="ml-list-swatch" style="background:${esc(l.color)}"></div></div>`).join('')+'</div>'}
 function bindListSelectors(root,onChange){for(const el of root.querySelectorAll('.ml-list-swatch-wrap'))el.onclick=e=>{e.preventDefault();e.stopPropagation();const id=Number(el.dataset.listId);onChange(id);for(const x of root.querySelectorAll('.ml-list-swatch-wrap'))x.classList.toggle('selected',Number(x.dataset.listId)===id)}}
-function makeErrorCode(kind,message,extra={}){return ['Marklister Error Report','Version: '+VERSION,'Error: '+kind,'Message: '+String(message||''),'Owner: '+(S.ownerName||'(not detected)'),'Selection mode: '+S.selectionMode,'Bug reject count: '+S.bugRejectCount,'Timestamp: '+new Date().toISOString(),...Object.entries(extra).map(([k,v])=>k+': '+String(v))].join('\n')}
+function safeReportText(value){
+  let s=String(value??'');
+  // Never put credentials/tokens into a report that may be pasted into Discord.
+  s=s.replace(/(X-Marklister-Token\s*[:=]\s*)[^\s,}\]]+/gi,'$1[REDACTED]');
+  s=s.replace(/(ADMIN_PASSWORD\s*[:=]\s*)[^\s,}\]]+/gi,'$1[REDACTED]');
+  s=s.replace(/\b[a-f0-9]{64}\b/gi,'[REDACTED_64HEX]');
+  return s;
+}
+function stackLocation(stack){
+  const lines=String(stack||'').split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+  return lines.find(x=>/\.user\.js|userscript|marklister/i.test(x)&&/:\d+:\d+/.test(x))||lines[1]||lines[0]||'';
+}
+function sourceText(fn,label){
+  if(typeof fn!=='function')return '';
+  let src='';
+  try{src=Function.prototype.toString.call(fn)}catch{return ''}
+  if(src.length>2600)src=src.slice(0,2600)+'\n... [truncated]';
+  return '--- '+label+' ---\n'+safeReportText(src);
+}
+function defaultErrorSources(kind){
+  if(kind==='BOOTSTRAP_FAILED')return [['bootstrap',bootstrap],['api',api],['gmRequest',gmRequest]];
+  if(kind==='SELF_NAME_DETECTION_FAILED')return [['refreshSelfHudFromTopLeftRecent',refreshSelfHudFromTopLeftRecent],['recordCanvasText',recordCanvasText],['isBugWord',isBugWord]];
+  if(/ENTRY|LIST/.test(kind))return [['api',api],['gmRequest',gmRequest]];
+  return [];
+}
+function makeErrorCode(kind,message,extra={}){
+  const err=extra.error instanceof Error?extra.error:null;
+  const stack=safeReportText(extra.stack||err?.stack||'');
+  const sources=Array.isArray(extra.sourceFns)?extra.sourceFns:defaultErrorSources(kind);
+  const lines=[
+    'Marklister Error Report',
+    'Version: '+VERSION,
+    'Error: '+kind,
+    'Message: '+safeReportText(message||''),
+    'Stage: '+safeReportText(extra.stage||err?.stage||'(unknown)'),
+    'Location: '+safeReportText(extra.location||stackLocation(stack)||'(unavailable)'),
+    'Owner: '+safeReportText(S.ownerName||'(not detected)'),
+    'Selection mode: '+S.selectionMode,
+    'Bug reject count: '+S.bugRejectCount,
+    'Timestamp: '+new Date().toISOString()
+  ];
+  const skip=new Set(['error','stack','sourceFns','stage','location']);
+  for(const [k,v] of Object.entries(extra)){
+    if(skip.has(k)||v===undefined||v===null)continue;
+    let out=v;
+    if(typeof v==='object'){try{out=JSON.stringify(v)}catch{out=String(v)}}
+    lines.push(k+': '+safeReportText(out));
+  }
+  if(err?.code)lines.push('Error code: '+safeReportText(err.code));
+  if(Number.isFinite(err?.status))lines.push('HTTP status: '+err.status);
+  if(Number.isFinite(err?.durationMs))lines.push('Request duration: '+Math.round(err.durationMs)+' ms');
+  if(err?.endpoint)lines.push('Endpoint: '+safeReportText(err.endpoint));
+  if(stack){lines.push('','Stack:',stack)}
+  const sourceBlocks=sources.map(([label,fn])=>sourceText(fn,label)).filter(Boolean);
+  if(sourceBlocks.length)lines.push('','Code Context:',...sourceBlocks);
+  return lines.join('\n');
+}
 function showError(kind,message,extra={}){try{if(S.errorOpen)return;S.errorOpen=true;const bg=document.createElement('div');bg.className='ml-error-bg';const code=makeErrorCode(kind,message,extra);bg.innerHTML=`<div class="ml-error-box"><button class="ml-error-close">✖</button><div class="ml-error-title">Your script has an error</div><div class="ml-error-msg">Oops, It seems there is an error in your script, Pls copy error code and report it to Discord: Eclipsa1234</div><button class="ml-error-copy" title="Copy error code">▣</button><pre class="ml-error-code"></pre></div>`;bg.querySelector('.ml-error-code').textContent=code;const close=()=>{bg.remove();S.errorOpen=false};bg.onclick=e=>{if(e.target===bg)close()};bg.querySelector('.ml-error-close').onclick=close;bg.querySelector('.ml-error-copy').onclick=async e=>{e.stopPropagation();try{await navigator.clipboard.writeText(code)}catch{const ta=document.createElement('textarea');ta.value=code;document.body.append(ta);ta.select();document.execCommand('copy');ta.remove()}};document.documentElement.appendChild(bg)}catch(err){console.error('[Marklister] error popup failed',err)}}
 function cancelCurrentTask(){if(S.selectionMode){S.selectionMode=false;S.selectedName=null;refreshActivity(true)}if(S.modal)closeModal();if(S.sideMode){S.sideMode=null;S.showList=false;renderUiState()}const err=document.querySelector('.ml-error-bg');if(err){err.remove();S.errorOpen=false}}
 
@@ -616,17 +672,61 @@ function getClientToken(){
   S.clientToken=token;
   return token;
 }
-function gmRequest({method='GET',url,data=null,headers={}}){
+function requestEndpoint(url){try{const u=new URL(url);return u.pathname+u.search}catch{return String(url||'')}}
+function requestError(message,code,details={}){const e=new Error(message);e.code=code;Object.assign(e,details);return e}
+function gmRequest({method='GET',url,data=null,headers={},timeoutMs=15000,stage='REQUEST'}){
   const requestHeaders={...headers,'X-Marklister-Token':getClientToken()};
   if(data)requestHeaders['Content-Type']='application/json';
+  const started=performance.now(),endpoint=requestEndpoint(url);
   return new Promise((resolve,reject)=>GM_xmlhttpRequest({
-    method,url,data:data?JSON.stringify(data):undefined,headers:requestHeaders,timeout:10000,
-    onload:r=>{let j=null;try{j=JSON.parse(r.responseText)}catch{}if(r.status>=200&&r.status<300)resolve(j);else reject(new Error(j?.error||r.responseText||`HTTP ${r.status}`))},
-    onerror:()=>reject(new Error('network error')),ontimeout:()=>reject(new Error('timeout'))
+    method,url,data:data?JSON.stringify(data):undefined,headers:requestHeaders,timeout:timeoutMs,
+    onload:r=>{
+      const durationMs=performance.now()-started;
+      let j=null;try{j=JSON.parse(r.responseText)}catch{}
+      if(r.status>=200&&r.status<300)return resolve(j);
+      reject(requestError(j?.error||r.responseText||`HTTP ${r.status}`,'HTTP_ERROR',{stage,endpoint,status:r.status,durationMs}));
+    },
+    onerror:()=>reject(requestError('network error','NETWORK_ERROR',{stage,endpoint,durationMs:performance.now()-started})),
+    ontimeout:()=>reject(requestError('timeout','TIMEOUT',{stage,endpoint,durationMs:performance.now()-started,timeoutMs}))
   }))
 }
-async function api(path,method='GET',data=null,headers={}){return gmRequest({method,url:S.serverUrl.replace(/\/$/,'')+path,data,headers})}
-async function bootstrap(force=false){if(!S.ownerConfirmed||!S.ownerName)return;if(!force&&Date.now()-S.lastSyncAt<2500)return;S.lastSyncAt=Date.now();try{const d=await api('/api/bootstrap?user='+encodeURIComponent(S.ownerName));applyPayload(d)}catch(e){console.warn('[Marklister] bootstrap failed',e);showError('BOOTSTRAP_FAILED',e.message)}}
+async function api(path,method='GET',data=null,headers={},options={}){
+  return gmRequest({method,url:S.serverUrl.replace(/\/$/,'')+path,data,headers,...options})
+}
+async function bootstrap(force=false){
+  if(!S.ownerConfirmed||!S.ownerName)return;
+  if(S.bootstrapPromise)return S.bootstrapPromise;
+  if(!force&&Date.now()-S.lastSyncAt<2500)return;
+  S.lastSyncAt=Date.now();
+  const endpoint='/api/bootstrap?user='+encodeURIComponent(S.ownerName);
+  S.bootstrapPromise=(async()=>{
+    let lastError=null;
+    for(let attempt=1;attempt<=2;attempt++){
+      try{
+        const d=await api(endpoint,'GET',null,{}, {timeoutMs:attempt===1?20000:25000,stage:'BOOT_FETCH'});
+        applyPayload(d);
+        return d;
+      }catch(e){
+        lastError=e;
+        const transient=e?.code==='TIMEOUT'||e?.code==='NETWORK_ERROR';
+        if(attempt===1&&transient){await new Promise(r=>setTimeout(r,700));continue}
+        console.warn('[Marklister] bootstrap failed',e);
+        showError('BOOTSTRAP_FAILED',e?.message||'Unknown bootstrap error',{
+          stage:e?.stage||'BOOT_FETCH',
+          endpoint:e?.endpoint||endpoint,
+          attempt,
+          timeoutMs:e?.timeoutMs||'',
+          error:e,
+          sourceFns:[['bootstrap',bootstrap],['api',api],['gmRequest',gmRequest]]
+        });
+        return null;
+      }
+    }
+    if(lastError)throw lastError;
+    return null;
+  })().finally(()=>{S.bootstrapPromise=null});
+  return S.bootstrapPromise;
+}
 function setList(items){S.entries=Array.isArray(items)?items:[];rebuildDisplayMap()}
 async function ensureOwnerReady(timeoutMs=2200){const start=performance.now();while(performance.now()-start<timeoutMs){refreshSelfHudFromTopLeftRecent();if(S.ownerConfirmed&&S.ownerName)return true;await new Promise(r=>setTimeout(r,80))}if(!S.nameDetectErrorShown){S.nameDetectErrorShown=true;showError('SELF_NAME_DETECTION_FAILED','Self username could not be detected.')}return false}
 async function addEntry(name,reason,listId){name=String(name||'').trim();if(!name)return alert('Type a user name.');if(isBugWord(name))return alert(name+' is in the Bug Words list and cannot be added as a player.');if(S.addBusy)return;if(S.entries.some(x=>String(x.name||'').toLowerCase()===name.toLowerCase()))return alert(name+' is already in one of your lists. Use Move list instead.');if(!(S.ownerConfirmed&&S.ownerName)){const ok=await ensureOwnerReady();if(!ok)return}reason=String(reason||'').trim()||'blank';listId=Number(listId||S.addListId||defaultList()?.id);if(!listId)return showError('NO_LIST_AVAILABLE','No destination list exists.');S.addBusy=true;try{const d=await api('/api/entry/add','POST',{owner:S.ownerName,name,reason,listId});applyPayload(d);S.selectionMode=false;S.selectedName=null;closeModal();refreshActivity(true)}catch(e){showError('ADD_ENTRY_FAILED',e.message,{target:name})}finally{S.addBusy=false}}
@@ -779,7 +879,7 @@ async function openDeveloperMode(){
 }
 function registerMenu(){GM_registerMenuCommand('Marklister: 새로고침',()=>bootstrap(true));GM_registerMenuCommand('Marklister: 사용자 인식 초기화',()=>{GM_setValue('marklister_owner','');S.ownerName='';S.ownerConfirmed=false;S.selfHud=null;S.labelCapture.selfHud=null;S.ownerCandidate=null;alert('Owner lock cleared. Reload florr.io.');});GM_registerMenuCommand('Marklister: 개발자 모드',openDeveloperMode);GM_registerMenuCommand('Marklister: 개발자 페이지',()=>{const u=DEFAULT_SERVER_URL+'/admin';if(typeof GM_openInTab==='function')GM_openInTab(u,{active:true,insert:true});else window.open(u,'_blank')})}
 
-function installGlobalErrorCapture(){const ours=v=>{const s=String(v||'').toLowerCase();return s.includes('marklister')||s.includes('userscript')};window.addEventListener('error',e=>{const st=e?.error?.stack||e?.filename||'';if(e?.error&&ours(st))showError('UNCAUGHT_ERROR',e.error.message||e.message,{stack:e.error.stack||''})});window.addEventListener('unhandledrejection',e=>{const r=e.reason,st=r?.stack||'';if(ours(st))showError('UNHANDLED_REJECTION',r?.message||String(r),{stack:st})})}
+function installGlobalErrorCapture(){const ours=v=>{const s=String(v||'').toLowerCase();return s.includes('marklister')||s.includes('userscript')};window.addEventListener('error',e=>{const st=e?.error?.stack||e?.filename||'';if(e?.error&&ours(st))showError('UNCAUGHT_ERROR',e.error.message||e.message,{stage:'UNCAUGHT',error:e.error,stack:e.error.stack||''})});window.addEventListener('unhandledrejection',e=>{const r=e.reason,st=r?.stack||'';if(ours(st))showError('UNHANDLED_REJECTION',r?.message||String(r),{stage:'UNHANDLED_REJECTION',error:r instanceof Error?r:null,stack:st})})}
 function start(){S.nameDetectStartedAt=Date.now();installFlorrkitHitboxBridge();createUI();installInputShield();installCanvasCapture();installKeys();installGlobalErrorCapture();registerMenu();refreshBugWords();refreshActivity(true)}
 start();
 })();
