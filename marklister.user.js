@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Marklister for florr.io
 // @namespace    marklister.florr.public
-// @version      1.5.1
+// @version      1.5.2
 // @updateURL    https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
 // @downloadURL  https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
 // @description  Marklister v1.5 test: multiple custom lists, list colors, move, persistent display selection, safer UI cancellation, error reports, Bug Words, and low-load tracking.
@@ -21,7 +21,7 @@
 (() => {
 'use strict';
 const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-const VERSION = '1.5.1-test';
+const VERSION = '1.5.2-test';
 const DEFAULT_SERVER_URL = 'https://marklister-server.starcofan.workers.dev';
 const CLIENT_TOKEN_KEY = 'marklister_client_token_v1';
 const UI_STATE_KEY = 'marklister_ui_state_v1';
@@ -109,7 +109,22 @@ const CSS = `
 .ml-listpanel{position:absolute;right:calc(100% + 7px);top:20px;width:245px;min-height:300px;max-height:440px;border-radius:9px;padding:10px 8px 8px;overflow:auto}.ml-list-handle{width:48px;height:4px;background:#504d4e;border-radius:2px;margin:0 auto 10px}.ml-entry{background:#918c8e;border-radius:4px;padding:7px 40px 7px 8px;margin:7px 0;position:relative;min-height:42px}.ml-entry-name{font-size:16px;font-weight:800}.ml-entry-reason{font-size:13px;font-weight:700;color:#ddd;margin-top:2px}.ml-entry-actions{position:absolute;right:5px;top:5px;display:flex;flex-direction:column;gap:2px}.ml-entry-actions button{width:25px;height:22px;border:0;background:transparent;color:#111;font-size:17px;cursor:pointer;padding:0}
 .ml-modal-bg{position:fixed;inset:0;z-index:1000002;background:transparent;display:flex;align-items:center;justify-content:center}.ml-modal{min-width:340px;max-width:510px;background:#777174;border:3px solid #3d3b3d;border-radius:9px;padding:10px;box-shadow:0 6px 18px rgba(0,0,0,.32)}.ml-modal-title{text-align:center;font-size:23px;font-weight:900;margin-bottom:9px}.ml-choices{display:flex;gap:18px}.ml-choice{flex:1;height:78px;border:0;border-radius:4px;background:#8d888a;color:#e6e2e3;font-size:20px;font-weight:900;cursor:pointer}.ml-field-label{font-size:15px;font-weight:800;margin:1px 0 2px}.ml-row{display:flex;gap:7px}.ml-input,.ml-textarea{width:100%;box-sizing:border-box;border:0;border-radius:2px;background:#8d888a;color:#fff;font-size:18px;font-weight:700;padding:7px 8px;outline:none}.ml-textarea{height:52px;resize:none}.ml-addbtn{width:66px;border:0;border-radius:2px;background:#8d888a;color:#fff;font-size:18px;font-weight:900;cursor:pointer}.ml-sp{height:6px}.ml-cancel{margin-top:7px;border:0;border-radius:3px;background:#625e60;color:#ddd;padding:6px 10px;cursor:pointer}
 #ml-overlay{position:fixed;inset:0;z-index:999999;pointer-events:none}.ml-ring{position:fixed;border-radius:50%;transform:translate(-50%,-50%);box-sizing:border-box;pointer-events:none}.ml-ring.blue{background:rgba(78,153,229,.16);border:3px solid rgba(78,153,229,.72)}.ml-ring.red{background:rgba(255,84,47,.30);border:3px solid rgba(236,79,50,.66)}.ml-hit-target{position:fixed;transform:translate(-50%,-50%);border-radius:50%;pointer-events:auto;cursor:pointer;background:transparent}.ml-hint{position:fixed;left:50%;top:30px;transform:translateX(-50%);background:rgba(0,70,45,.86);border-radius:6px;padding:6px 15px;color:#fff;font-size:24px;font-weight:900;pointer-events:none}.ml-line{position:fixed;height:2px;background:#d64236;transform-origin:left center;pointer-events:none}.ml-badge{position:fixed;background:#d24c40;color:#fff;border-radius:2px;padding:2px 6px 4px;min-width:78px;font-weight:900;pointer-events:none}.ml-badge .small{font-size:14px;line-height:1}.ml-badge .big{font-size:18px;line-height:1.1}.ml-target-name{position:fixed;transform:translate(-50%,-100%);padding:2px 6px;background:rgba(73,142,210,.88);border:1px solid rgba(36,91,145,.85);border-radius:3px;color:#0b1d2c;font-size:15px;font-weight:900;line-height:1.15;white-space:nowrap;pointer-events:none;text-shadow:none}
-.ml-side-row{display:flex;align-items:center;gap:8px;background:#918c8e;border-radius:4px;padding:8px;margin:7px 0;font-size:18px;font-weight:900}.ml-side-row .grow{flex:1}.ml-color-box{width:27px;height:27px;border:3px solid #494647;display:inline-block;flex:0 0 auto;cursor:pointer}.ml-color-box.locked{cursor:not-allowed}.ml-side-icon{width:25px;height:25px;border:0;background:transparent;font-size:18px;cursor:pointer;padding:0}.ml-list-title{display:flex;align-items:center;justify-content:center;gap:9px;font-size:22px;font-weight:900;margin:3px 0 8px}.ml-check{width:24px;height:24px;border:3px solid #514e4f;background:transparent;display:flex;align-items:center;justify-content:center;font-size:18px}.ml-check.on::after{content:'✓';font-weight:900;color:#fff}.ml-list-selectors{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px;min-height:38px}.ml-list-swatch-wrap{position:relative;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%}.ml-list-swatch-wrap.selected{outline:4px solid #ff1717;outline-offset:2px}.ml-list-swatch{width:25px;height:25px;border:3px solid #494647;cursor:pointer}.ml-list-tooltip{position:absolute;bottom:34px;left:50%;transform:translateX(-50%);display:none;background:#aaa6a8;color:#fff;padding:3px 8px;border-radius:3px;font-weight:900;white-space:nowrap}.ml-list-swatch-wrap:hover .ml-list-tooltip{display:block}.ml-move-popup{position:absolute;z-index:4;left:50%;top:50%;transform:translate(-50%,-50%);background:#777174;border:3px solid #3d3b3d;border-radius:8px;padding:10px;min-width:245px;box-shadow:0 6px 18px rgba(0,0,0,.3)}.ml-move-row{display:flex;align-items:center;gap:10px;background:#918c8e;border-radius:4px;padding:7px;margin:7px 0;font-weight:900;font-size:18px}.ml-move-row span{flex:1}.ml-error-bg{position:fixed;inset:0;z-index:1000010;background:rgba(0,0,0,.06);display:flex;align-items:center;justify-content:center}.ml-error-box{position:relative;width:min(720px,92vw);background:#777174;border:3px solid #3d3b3d;border-radius:10px;padding:16px;box-shadow:0 6px 18px rgba(0,0,0,.3);text-align:center}.ml-error-title{font-size:27px;font-weight:900}.ml-error-msg{font-size:18px;font-weight:800;margin:8px auto;max-width:410px}.ml-error-close{position:absolute;right:7px;top:7px;border:3px solid #3d3b3d;border-radius:6px;background:#999;color:red;font-size:22px;font-weight:900;line-height:1;padding:3px 6px}.ml-error-copy{position:absolute;right:24px;top:145px;border:2px solid #3d3b3d;border-radius:4px;background:#aaa6a8;width:24px;height:24px}.ml-error-copy::after{content:'Copy error code';position:absolute;right:-75px;top:27px;background:#aaa6a8;color:white;padding:3px 8px;border-radius:3px;white-space:nowrap;font-weight:900;display:none}.ml-error-copy:hover::after{display:block}.ml-error-code{margin-top:34px;background:#6a6668;border-radius:5px;min-height:95px;max-height:360px;overflow:auto;text-align:left;white-space:pre-wrap;word-break:break-word;padding:8px;color:#ddd;font:12px Consolas,monospace;user-select:text}.ml-palette-hidden{position:fixed;opacity:0;pointer-events:none;width:1px;height:1px}
+.ml-side-row{display:flex;align-items:center;gap:8px;background:#918c8e;border-radius:4px;padding:8px;margin:7px 0;font-size:18px;font-weight:900}.ml-side-row .grow{flex:1}.ml-color-box{width:27px;height:27px;border:3px solid #494647;display:inline-block;flex:0 0 auto;cursor:pointer}.ml-color-box.locked{cursor:not-allowed}.ml-side-icon{width:25px;height:25px;border:0;background:transparent;font-size:18px;cursor:pointer;padding:0}.ml-list-title{display:flex;align-items:center;justify-content:center;gap:9px;font-size:22px;font-weight:900;margin:3px 0 8px}.ml-check{width:24px;height:24px;border:3px solid #514e4f;background:transparent;display:flex;align-items:center;justify-content:center;font-size:18px}.ml-check.on::after{content:'✓';font-weight:900;color:#fff}.ml-list-selectors{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px;min-height:38px}.ml-list-swatch-wrap{position:relative;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%}.ml-list-swatch-wrap.selected{outline:4px solid #ff1717;outline-offset:2px}.ml-list-swatch{width:25px;height:25px;border:3px solid #494647;cursor:pointer}.ml-list-tooltip{position:absolute;bottom:34px;left:50%;transform:translateX(-50%);display:none;background:#aaa6a8;color:#fff;padding:3px 8px;border-radius:3px;font-weight:900;white-space:nowrap}.ml-list-swatch-wrap:hover .ml-list-tooltip{display:block}.ml-move-popup{position:absolute;z-index:4;left:50%;top:50%;transform:translate(-50%,-50%);background:#777174;border:3px solid #3d3b3d;border-radius:8px;padding:10px;min-width:245px;box-shadow:0 6px 18px rgba(0,0,0,.3)}.ml-move-row{display:flex;align-items:center;gap:10px;background:#918c8e;border-radius:4px;padding:7px;margin:7px 0;font-weight:900;font-size:18px}.ml-move-row span{flex:1}.ml-error-bg{position:fixed;inset:0;z-index:1000010;background:rgba(0,0,0,.06);display:flex;align-items:center;justify-content:center}.ml-error-box{position:relative;width:min(720px,92vw);background:#777174;border:3px solid #3d3b3d;border-radius:10px;padding:16px;box-shadow:0 6px 18px rgba(0,0,0,.3);text-align:center}.ml-error-title{font-size:27px;font-weight:900}.ml-error-msg{font-size:18px;font-weight:800;margin:8px auto;max-width:410px}.ml-error-close{position:absolute;right:7px;top:7px;border:3px solid #3d3b3d;border-radius:6px;background:#999;color:red;font-size:22px;font-weight:900;line-height:1;padding:3px 6px}.ml-error-copy{position:absolute;right:24px;top:145px;border:2px solid #3d3b3d;border-radius:4px;background:#aaa6a8;width:24px;height:24px}.ml-error-copy::after{content:'Copy error code';position:absolute;right:-75px;top:27px;background:#aaa6a8;color:white;padding:3px 8px;border-radius:3px;white-space:nowrap;font-weight:900;display:none}.ml-error-copy:hover::after{display:block}.ml-error-code{margin-top:34px;background:#6a6668;border-radius:5px;min-height:95px;max-height:360px;overflow:auto;text-align:left;white-space:pre-wrap;word-break:break-word;padding:8px;color:#ddd;font:12px Consolas,monospace;user-select:text}.ml-color-palette-bg{position:fixed;inset:0;z-index:2147483646;background:rgba(40,37,39,.28);display:flex;align-items:center;justify-content:center}
+.ml-color-palette{width:330px;max-width:calc(100vw - 28px);background:#858183;border:4px solid #3d3b3d;border-radius:10px;padding:14px;box-shadow:0 14px 38px rgba(0,0,0,.34);color:#fff}
+.ml-color-palette-title{text-align:center;font-size:21px;font-weight:900;margin-bottom:11px}
+.ml-color-preview-row{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.ml-color-preview{width:54px;height:54px;border:3px solid #3d3b3d;border-radius:7px;flex:none}
+.ml-color-hex{flex:1;min-width:0;border:3px solid #3d3b3d;border-radius:7px;background:#999596;color:#343132;font-weight:900;font-size:17px;padding:9px 10px;text-transform:uppercase}
+.ml-color-presets{display:grid;grid-template-columns:repeat(6,1fr);gap:7px;margin:10px 0 13px}
+.ml-color-preset{aspect-ratio:1;border:3px solid #4a4648;border-radius:6px;cursor:pointer;position:relative}
+.ml-color-preset:hover{transform:scale(1.06)}
+.ml-color-preset.selected::after{content:'';position:absolute;inset:-6px;border:3px solid #eee;border-radius:9px;pointer-events:none}
+.ml-color-native-row{display:flex;align-items:center;gap:10px;margin-top:2px}
+.ml-color-native-label{font-weight:900;color:#ddd;flex:1}
+.ml-color-native{width:72px;height:38px;border:3px solid #3d3b3d;border-radius:7px;background:#999596;padding:2px;cursor:pointer}
+.ml-color-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:14px}
+.ml-color-cancel,.ml-color-apply{border:3px solid #3d3b3d;border-radius:7px;color:#fff;font-weight:900;padding:8px 15px;cursor:pointer}
+.ml-color-cancel{background:#777375}.ml-color-apply{background:#aaa6a8}.ml-color-apply:hover,.ml-color-cancel:hover{filter:brightness(1.08)}
 
 `;
 
@@ -124,7 +139,95 @@ function rebuildDisplayMap(){const chosen=S.displayAll?new Set(S.lists.map(x=>Nu
 function applyPayload(d){S.lists=Array.isArray(d.lists)?d.lists:[];S.entries=Array.isArray(d.entries)?d.entries:(Array.isArray(d.items)?d.items:[]);const valid=new Set(S.lists.map(x=>Number(x.id)));S.displayedListIds=new Set([...S.displayedListIds].filter(id=>valid.has(Number(id))));if(!S.displayAll&&S.displayedListIds.size===0){const def=defaultList();if(def)S.displayedListIds.add(Number(def.id))}if(!S.addListId||!valid.has(Number(S.addListId))){const def=defaultList();S.addListId=def?Number(def.id):null}rebuildDisplayMap();if(S.uiMode==='full'&&S.sideMode)renderSidePanel()}
 function selectedColorForName(name){const e=S.listMap.get(String(name||'').toLowerCase());return e?.list_color||listById(e?.list_id)?.color||DEFAULT_LIST_COLOR}
 function hexToRgba(hex,a){const m=/^#([0-9a-f]{6})$/i.exec(String(hex||''));if(!m)return `rgba(255,26,26,${a})`;const n=parseInt(m[1],16),r=(n>>16)&255,g=(n>>8)&255,b=n&255;return `rgba(${r},${g},${b},${a})`}
-function chooseColor(initial,onPick){const i=document.createElement('input');i.type='color';i.value=/^#[0-9a-f]{6}$/i.test(initial||'')?initial:'#13aee8';i.className='ml-palette-hidden';document.documentElement.appendChild(i);i.oninput=()=>{onPick(i.value);i.remove()};i.onchange=()=>{if(i.isConnected){onPick(i.value);i.remove()}};i.onblur=()=>setTimeout(()=>i.remove(),120);i.click()}
+function closeColorPalette(){
+  const bg=document.querySelector('.ml-color-palette-bg');
+  if(bg)bg.remove();
+}
+function chooseColor(initial,onPick){
+  closeColorPalette();
+  const presets=['#ff1a1a','#13aee8','#fff119','#7ee842','#e865d9','#a470ff','#ff8c22','#25d7be','#f45d75','#67a6ff','#d0e64a','#ffba65'];
+  let current=/^#[0-9a-f]{6}$/i.test(String(initial||''))?String(initial).toLowerCase():'#13aee8';
+
+  const bg=document.createElement('div');
+  bg.className='ml-color-palette-bg';
+  // Intentionally do not close on outside click. The palette stays open
+  // until Select / Cancel / Escape.
+  bg.onclick=e=>{if(e.target===bg){e.preventDefault();e.stopPropagation()}};
+
+  const box=document.createElement('div');
+  box.className='ml-color-palette';
+  box.innerHTML=`<div class="ml-color-palette-title">Select color</div>
+    <div class="ml-color-preview-row">
+      <div class="ml-color-preview" id="mlcp-preview"></div>
+      <input class="ml-color-hex" id="mlcp-hex" maxlength="7" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="ml-color-presets" id="mlcp-presets"></div>
+    <div class="ml-color-native-row">
+      <div class="ml-color-native-label">Detailed color</div>
+      <input class="ml-color-native" id="mlcp-native" type="color">
+    </div>
+    <div class="ml-color-actions">
+      <button class="ml-color-cancel" id="mlcp-cancel">Cancel</button>
+      <button class="ml-color-apply" id="mlcp-apply">Select</button>
+    </div>`;
+  bg.appendChild(box);
+  document.documentElement.appendChild(bg);
+
+  const preview=box.querySelector('#mlcp-preview');
+  const hex=box.querySelector('#mlcp-hex');
+  const native=box.querySelector('#mlcp-native');
+  const grid=box.querySelector('#mlcp-presets');
+
+  function redraw(updateHex=true){
+    preview.style.background=current;
+    native.value=current;
+    if(updateHex)hex.value=current.toUpperCase();
+    for(const sw of grid.querySelectorAll('.ml-color-preset')){
+      sw.classList.toggle('selected',String(sw.dataset.color).toLowerCase()===current);
+    }
+  }
+  function setCurrent(v,updateHex=true){
+    v=String(v||'').trim();
+    if(!v.startsWith('#'))v='#'+v;
+    if(!/^#[0-9a-f]{6}$/i.test(v))return false;
+    current=v.toLowerCase();
+    redraw(updateHex);
+    return true;
+  }
+
+  for(const color of presets){
+    const sw=document.createElement('button');
+    sw.type='button';
+    sw.className='ml-color-preset';
+    sw.dataset.color=color;
+    sw.style.background=color;
+    sw.title=color.toUpperCase();
+    sw.onclick=e=>{e.preventDefault();e.stopPropagation();setCurrent(color,true)};
+    grid.appendChild(sw);
+  }
+
+  hex.oninput=()=>{
+    let v=hex.value.trim();
+    if(!v.startsWith('#')&&v.length===6)v='#'+v;
+    if(/^#[0-9a-f]{6}$/i.test(v))setCurrent(v,false);
+  };
+  hex.onblur=()=>redraw(true);
+  native.oninput=()=>setCurrent(native.value,true);
+  native.onchange=()=>setCurrent(native.value,true);
+
+  box.querySelector('#mlcp-cancel').onclick=e=>{
+    e.preventDefault();e.stopPropagation();closeColorPalette();
+  };
+  box.querySelector('#mlcp-apply').onclick=e=>{
+    e.preventDefault();e.stopPropagation();
+    const finalHex=hex.value.trim();
+    if(finalHex&&/^#?[0-9a-f]{6}$/i.test(finalHex))setCurrent(finalHex,true);
+    closeColorPalette();
+    onPick(current);
+  };
+
+  redraw(true);
+}
 function listSelectorHtml(selectedId){return '<div class="ml-list-selectors">'+S.lists.map(l=>`<div class="ml-list-swatch-wrap ${Number(l.id)===Number(selectedId)?'selected':''}" data-list-id="${l.id}"><div class="ml-list-tooltip">${esc(l.name)}</div><div class="ml-list-swatch" style="background:${esc(l.color)}"></div></div>`).join('')+'</div>'}
 function bindListSelectors(root,onChange){for(const el of root.querySelectorAll('.ml-list-swatch-wrap'))el.onclick=e=>{e.preventDefault();e.stopPropagation();const id=Number(el.dataset.listId);onChange(id);for(const x of root.querySelectorAll('.ml-list-swatch-wrap'))x.classList.toggle('selected',Number(x.dataset.listId)===id)}}
 function safeReportText(value){
@@ -185,7 +288,15 @@ function makeErrorCode(kind,message,extra={}){
   return lines.join('\n');
 }
 function showError(kind,message,extra={}){try{if(S.errorOpen)return;S.errorOpen=true;const bg=document.createElement('div');bg.className='ml-error-bg';const code=makeErrorCode(kind,message,extra);bg.innerHTML=`<div class="ml-error-box"><button class="ml-error-close">✖</button><div class="ml-error-title">Your script has an error</div><div class="ml-error-msg">Oops, It seems there is an error in your script, Pls copy error code and report it to Discord: Eclipsa1234</div><button class="ml-error-copy" title="Copy error code">▣</button><pre class="ml-error-code"></pre></div>`;bg.querySelector('.ml-error-code').textContent=code;const close=()=>{bg.remove();S.errorOpen=false};bg.onclick=e=>{if(e.target===bg)close()};bg.querySelector('.ml-error-close').onclick=close;bg.querySelector('.ml-error-copy').onclick=async e=>{e.stopPropagation();try{await navigator.clipboard.writeText(code)}catch{const ta=document.createElement('textarea');ta.value=code;document.body.append(ta);ta.select();document.execCommand('copy');ta.remove()}};document.documentElement.appendChild(bg)}catch(err){console.error('[Marklister] error popup failed',err)}}
-function cancelCurrentTask(){if(S.selectionMode){S.selectionMode=false;S.selectedName=null;refreshActivity(true)}if(S.modal)closeModal();if(S.sideMode){S.sideMode=null;S.showList=false;renderUiState()}const err=document.querySelector('.ml-error-bg');if(err){err.remove();S.errorOpen=false}}
+function cancelCurrentTask(){
+  const palette=document.querySelector('.ml-color-palette-bg');
+  if(palette){palette.remove();return}
+  if(S.selectionMode){S.selectionMode=false;S.selectedName=null;refreshActivity(true)}
+  if(S.modal)closeModal();
+  if(S.sideMode){S.sideMode=null;S.showList=false;renderUiState()}
+  const err=document.querySelector('.ml-error-bg');
+  if(err){err.remove();S.errorOpen=false}
+}
 
 function markedDisplayActive(){return !!(S.displayEnabled&&S.listMap.size)}
 function worldTrackingActive(){return !!(!S.ownerConfirmed||S.selectionMode||markedDisplayActive())}
