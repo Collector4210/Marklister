@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Marklister for florr.io
 // @namespace    marklister.florr.public
-// @version      1.5.4
+// @version      1.5.5
 // @updateURL    https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
 // @downloadURL  https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
-// @description  Marklister v1.5 test: multiple custom lists, list colors, move, persistent display selection, safer UI cancellation, error reports, Bug Words, and low-load tracking.
+// @description  Marklister v1.5.5 internal-state gate: multiple custom lists, list colors, move, persistent display selection, safer UI cancellation, error reports, Bug Words, and low-load tracking.
 // @match        https://florr.io/*
 // @match        https://*.florr.io/*
 // @run-at       document-start
@@ -21,7 +21,8 @@
 (() => {
 'use strict';
 const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-const VERSION = '1.5.4-test';
+const VERSION = '1.5.5-test';
+const BUILD = 'internal-state-gate';
 const DEFAULT_SERVER_URL = 'https://marklister-server.starcofan.workers.dev';
 const CLIENT_TOKEN_KEY = 'marklister_client_token_v1';
 const UI_STATE_KEY = 'marklister_ui_state_v1';
@@ -60,6 +61,8 @@ const S = {
   clientToken: '',
   ownerName: '', // detect fresh every page load; never trust stale owner saved by older buggy builds
   ownerDetectionGeneration: 0,
+  hudGateCandidate: null,
+  gameplayGate: {lastPoll:-Infinity, positiveCount:0, confirmedAt:0, ready:false, module:null, status:"waiting-runtime", value:null},
   ownerCandidate: null,
   ownerConfirmed: false,
   selfHud: null,
@@ -264,6 +267,10 @@ function makeErrorCode(kind,message,extra={}){
   const lines=[
     'Marklister Error Report',
     'Version: '+VERSION,
+    'Build: '+BUILD,
+    'Game signal: '+S.gameplayGate.status,
+    'Game signal value: '+S.gameplayGate.value,
+    'Game signal confirmations: '+S.gameplayGate.positiveCount,
     'Error: '+kind,
     'Message: '+safeReportText(message||''),
     'Stage: '+safeReportText(extra.stage||err?.stage||'(unknown)'),
@@ -400,6 +407,8 @@ function canvasPointToClient(ctx,p){try{const c=ctx.canvas,r=c.getBoundingClient
 function updateOwnerLabel(){
   const el=document.getElementById('ml-owner-name');
   if(!el)return;
+  el.title='Click to detect your username again';
+  if(!S.ownerConfirmed&&S.gameplayGate)el.title+=' | Game signal: '+S.gameplayGate.status;
   if(S.ownerConfirmed&&S.ownerName){
     el.textContent='User: '+S.ownerName;
     el.className='ml-owner-name';
@@ -413,6 +422,8 @@ function updateOwnerLabel(){
 }
 function restartOwnerDetection(){
   S.ownerDetectionGeneration++;
+  resetGameplayGate();
+  S.hudGateCandidate=null;
   S.bootstrapPromise=null;
   S.lastSyncAt=0;
   S.ownerName='';
@@ -455,6 +466,40 @@ function restartOwnerDetection(){
   refreshActivity(true);
 }
 
+function resetGameplayGate(){
+  S.gameplayGate={lastPoll:-Infinity,positiveCount:0,confirmedAt:0,ready:false,
+    module:null,status:'waiting-runtime',value:null};
+}
+
+function gameplayDetectionAllowed(){
+  const g=S.gameplayGate,now=performance.now();
+  if(now-g.lastPoll<200)return g.ready;
+  // Long gaps (background tabs, frozen rendering) must not join old samples.
+  if(now-g.lastPoll>1200){g.positiveCount=0;g.ready=false;g.confirmedAt=0}
+  g.lastPoll=now;
+  let status='waiting-runtime',value=null,M=null;
+  try{
+    M=moduleHeap();
+    if(M?.calledRun&&M.asm&&M.HEAPU8?.length){
+      const query=M._cp6_browser_quit_confirmation;
+      if(typeof query==='function'){
+        const result=query.call(M);
+        value=result===1?1:result===0?0:null;
+        status=value===1?'positive':value===0?'not-confirmed':'unexpected-result';
+      }else status='unavailable';
+    }
+  }catch{status='unavailable'}
+  if(g.module!==M){g.module=M;g.positiveCount=0;g.ready=false;g.confirmedAt=0}
+  g.value=value;g.status=status;
+  if(value===1){
+    g.positiveCount=Math.min(3,g.positiveCount+1);
+    if(g.positiveCount>=3&&!g.ready){g.ready=true;g.confirmedAt=Date.now()}
+  }else{
+    g.positiveCount=0;g.ready=false;g.confirmedAt=0;
+  }
+  return g.ready;
+}
+
 function activateSelfNameDetection(reason){
   if(S.ownerConfirmed||S.nameDetectActive)return;
   S.nameDetectActive=true;
@@ -466,11 +511,25 @@ function activateSelfNameDetection(reason){
   updateOwnerLabel();
 }
 
+function waitForSelfHud(){
+  if(S.ownerConfirmed)return;
+  S.hudGateCandidate=null;
+  S.ownerCandidate=null;
+  S.nameDetectStartedAt=0;
+  S.nameDetectEvidence='';
+  if(S.nameDetectActive){S.nameDetectActive=false;updateOwnerLabel()}
+}
+
 function refreshSelfHudFromTopLeftRecent(){
   const cap=S.labelCapture,now=Date.now();
-  if(!S.ownerConfirmed&&!S.nameDetectActive)return cap.selfHud;
-  const recent=cap.topLeftRecent.filter(r=>now-r.t<3500).filter(r=>inSelfHudBroadZone(r));
-  if(!recent.length)return cap.selfHud;
+  if(S.ownerConfirmed)return cap.selfHud;
+  if(!gameplayDetectionAllowed()){
+    waitForSelfHud();
+    cap.topLeftRecent.length=0;
+    return cap.selfHud;
+  }
+  const recent=cap.topLeftRecent.filter(r=>now-r.t<1200&&r.t>=S.gameplayGate.confirmedAt).filter(r=>inSelfHudBroadZone(r));
+  if(!recent.length){waitForSelfHud();return cap.selfHud;}
   const levelGroups=new Map(),nameGroups=new Map();
   for(const r of recent){
     const m=/^Lvl\.?\s*[:#]?\s*(\d+)$/i.exec(String(r.text).trim());
@@ -480,6 +539,7 @@ function refreshSelfHudFromTopLeftRecent(){
   }
   for(const r of recent){
     const text=String(r.text).trim();
+    if(/^(connecting|logging\s*in|loggin\s*in|loading|ready|play|start)(?:[.!… ]*)$/i.test(text))continue;
     if(!inSelfHudNameZone(r)||!validSelfUsername(text)||looksLikeGuildTag(text))continue;
         const key=`${text}\0${Math.round(r.x/3)}\0${Math.round(r.y/3)}`;
     const g=nameGroups.get(key)||{username:text,rows:[]};g.rows.push(r);nameGroups.set(key,g);
@@ -490,14 +550,31 @@ function refreshSelfHudFromTopLeftRecent(){
     for(const ng of nameGroups.values()){
       if(ng.rows.length<2)continue;const nr=ng.rows[ng.rows.length-1];
       const dx=Math.abs(nr.x-lr.x),dy=lr.y-nr.y;
-      if(dx>120||dy<18||dy>72)continue;
+      if(dx>120||dy<18||dy>72||Math.abs(nr.t-lr.t)>250)continue;
       const score=ng.rows.length*5+lg.rows.length*4-dx*.08-Math.abs(dy-34)*.3+Math.max(nr.t,lr.t)*1e-12;
       if(!best||score>best.score)best={score,username:ng.username,level:lg.level,nr,lr,nCount:ng.rows.length,lCount:lg.rows.length};
     }
   }
-  if(!best){if(S.nameDetectActive&&!S.ownerConfirmed&&!S.nameDetectErrorShown&&Date.now()-S.nameDetectStartedAt>18000){S.nameDetectErrorShown=true;showError('SELF_NAME_DETECTION_FAILED','Could not detect a valid florr.io username after gameplay started.',{stage:'SELF_HUD_DETECT',gameplayEvidence:S.nameDetectEvidence,elapsedMs:Date.now()-S.nameDetectStartedAt})}return cap.selfHud;}
-  if(isBugWord(best.username)){S.bugRejectCount++;S.ownerCandidate=null;if(!S.nameDetectErrorShown&&S.bugRejectCount>=10){S.nameDetectErrorShown=true;showError('SELF_NAME_DETECTION_FAILED','Repeatedly detected only Bug Words.',{lastCandidate:best.username})}return cap.selfHud}
-  if(!S.bugWordsReady)return cap.selfHud;
+  if(!best){waitForSelfHud();return cap.selfHud;}
+  if(!S.bugWordsReady){waitForSelfHud();return cap.selfHud;}
+
+  // A level alone is also visible at home. Require a fresh, stable name/level
+  // pair before treating this as a detectable self HUD. This is evidence from
+  // rendered HUD text, not an authoritative game-state flag.
+  let gate=S.hudGateCandidate;
+  const same=gate&&gate.username===best.username&&gate.level===best.level&&
+    Math.abs(gate.x-best.nr.x)<=6&&Math.abs(gate.y-best.nr.y)<=6&&
+    Math.abs(gate.lx-best.lr.x)<=6&&Math.abs(gate.ly-best.lr.y)<=6&&now-gate.lastSeen<=1200;
+  if(!same){
+    waitForSelfHud();
+    S.hudGateCandidate={username:best.username,level:best.level,x:best.nr.x,y:best.nr.y,
+      lx:best.lr.x,ly:best.lr.y,firstSeen:now,lastSeen:now,lastDraw:Math.min(best.nr.t,best.lr.t),samples:1};
+    return cap.selfHud;
+  }
+  const draw=Math.min(best.nr.t,best.lr.t);
+  if(draw>gate.lastDraw){gate.samples++;gate.lastDraw=draw;gate.lastSeen=now}
+  if(now-gate.firstSeen<600||gate.samples<3)return cap.selfHud;
+  activateSelfNameDetection('internal quit-confirmation signal + stable username/Lvl HUD');
 
   // Never create a server user from a single transient world label.  The same
   // fixed HUD pair must win repeatedly before an owner is accepted.
@@ -583,22 +660,12 @@ function recordCanvasText(ctx,args){
   if(cap.recent.length>120)cap.recent.splice(0,cap.recent.length-120);
 
   const selfLevelMatch=/^Lvl\.?\s*[:#]?\s*(\d+)$/i.exec(text);
-  if(!S.ownerConfirmed&&selfLevelMatch&&inSelfHudLevelZone(client)){
-    // Loading screens (Connecting / Logging in) and the Ready/start screen do not
-    // have the fixed top-left gameplay Lvl HUD. Start the detection clock only
-    // after this gameplay-only evidence appears.
-    activateSelfNameDetection('top-left Lvl HUD');
-  }
-
+  // Keep collecting while waiting; a level alone never starts detection.
   if(!S.ownerConfirmed&&client.x<520&&client.y<280){
-    if(S.nameDetectActive&&isBugWord(text)&&inSelfHudNameZone(client)){
-      S.bugRejectCount++;
-      if(!S.nameDetectErrorShown&&S.bugRejectCount>=10){S.nameDetectErrorShown=true;showError('SELF_NAME_DETECTION_FAILED','Repeatedly detected only Bug Words.',{stage:'SELF_HUD_DETECT',gameplayEvidence:S.nameDetectEvidence,lastCandidate:text})}
-    }
     cap.topLeftRecent.push({text,x:client.x,y:client.y,t:Date.now(),font:String(ctx.font||''),fillStyle:String(ctx.fillStyle??'')});
     const tc=Date.now()-5000;
     cap.topLeftRecent=cap.topLeftRecent.filter(r=>r.t>=tc).slice(-120);
-    if(S.nameDetectActive)refreshSelfHudFromTopLeftRecent();
+    refreshSelfHudFromTopLeftRecent();
   }
 
   const lm=selfLevelMatch;if(!lm)return;
@@ -926,18 +993,13 @@ function setList(items){S.entries=Array.isArray(items)?items:[];rebuildDisplayMa
 async function ensureOwnerReady(timeoutMs=2200){
   const start=performance.now();
   while(performance.now()-start<timeoutMs){
-    if(S.nameDetectActive)refreshSelfHudFromTopLeftRecent();
+    refreshSelfHudFromTopLeftRecent();
     if(S.ownerConfirmed&&S.ownerName)return true;
     await new Promise(r=>setTimeout(r,80));
   }
-  if(!S.nameDetectActive){
-    alert('Enter the game first so Marklister can detect your username.');
-    return false;
-  }
-  if(!S.nameDetectErrorShown){
-    S.nameDetectErrorShown=true;
-    showError('SELF_NAME_DETECTION_FAILED','Self username could not be detected after gameplay started.',{stage:'SELF_HUD_DETECT',gameplayEvidence:S.nameDetectEvidence});
-  }
+  alert(S.nameDetectActive
+    ? 'Your username is still being detected. Please try again shortly.'
+    : 'Enter the game and wait for your username to appear in the top-left HUD. Click the User label to retry if needed.');
   return false
 }
 async function addEntry(name,reason,listId){name=String(name||'').trim();if(!name)return alert('Type a user name.');if(isBugWord(name))return alert(name+' is in the Bug Words list and cannot be added as a player.');if(S.addBusy)return;if(S.entries.some(x=>String(x.name||'').toLowerCase()===name.toLowerCase()))return alert(name+' is already in one of your lists. Use Move list instead.');if(!(S.ownerConfirmed&&S.ownerName)){const ok=await ensureOwnerReady();if(!ok)return}reason=String(reason||'').trim()||'blank';listId=Number(listId||S.addListId||defaultList()?.id);if(!listId)return showError('NO_LIST_AVAILABLE','No destination list exists.');S.addBusy=true;try{const d=await api('/api/entry/add','POST',{owner:S.ownerName,name,reason,listId});applyPayload(d);S.selectionMode=false;S.selectedName=null;closeModal();refreshActivity(true)}catch(e){showError('ADD_ENTRY_FAILED',e.message,{target:name})}finally{S.addBusy=false}}
