@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Marklister for florr.io
 // @namespace    marklister.florr.public
-// @version      1.5.5
+// @version      1.5.6
 // @updateURL    https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
 // @downloadURL  https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
-// @description  Marklister v1.5.5 internal-state gate: multiple custom lists, list colors, move, persistent display selection, safer UI cancellation, error reports, Bug Words, and low-load tracking.
+// @description  Marklister v1.5.6 internal-state gate: multiple custom lists, list colors, move, persistent display selection, safer UI cancellation, error reports, Bug Words, and low-load tracking.
 // @match        https://florr.io/*
 // @match        https://*.florr.io/*
 // @run-at       document-start
@@ -16,13 +16,14 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_openInTab
 // @connect      marklister-server.starcofan.workers.dev
+// @connect      raw.githubusercontent.com
 // ==/UserScript==
 
 (() => {
 'use strict';
 const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-const VERSION = '1.5.5-test';
-const BUILD = 'internal-state-gate';
+const VERSION = '1.5.6-test';
+const BUILD = 'list-submit-lock-and-update-notice';
 const DEFAULT_SERVER_URL = 'https://marklister-server.starcofan.workers.dev';
 const CLIENT_TOKEN_KEY = 'marklister_client_token_v1';
 const UI_STATE_KEY = 'marklister_ui_state_v1';
@@ -59,6 +60,8 @@ const ICON_COL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABFIAAARSCAYAAACD
 const S = {
   serverUrl: DEFAULT_SERVER_URL,
   clientToken: '',
+  createListBusy: false,
+  updateCheckBusy: false,
   ownerName: '', // detect fresh every page load; never trust stale owner saved by older buggy builds
   ownerDetectionGeneration: 0,
   hudGateCandidate: null,
@@ -1006,7 +1009,31 @@ async function addEntry(name,reason,listId){name=String(name||'').trim();if(!nam
 async function updateEntry(id,name,reason){reason=String(reason||'').trim()||'blank';try{const d=await api('/api/entry/update','POST',{owner:S.ownerName,id,name,reason});applyPayload(d);closeModal()}catch(e){showError('UPDATE_ENTRY_FAILED',e.message)}}
 async function moveEntry(id,listId){try{const d=await api('/api/entry/move','POST',{owner:S.ownerName,id,listId});applyPayload(d);closeModal()}catch(e){showError('MOVE_ENTRY_FAILED',e.message)}}
 async function deleteEntry(id){try{const d=await api('/api/entry/delete','POST',{owner:S.ownerName,id});applyPayload(d)}catch(e){showError('DELETE_ENTRY_FAILED',e.message)}}
-async function createList(name,color){name=String(name||'').trim();if(!name)return alert('Type a list name.');try{const d=await api('/api/list/create','POST',{owner:S.ownerName,name,color});applyPayload(d);closeModal()}catch(e){showError('CREATE_LIST_FAILED',e.message)}}
+async function createList(name,color){
+  if(S.createListBusy)return;
+  name=String(name||'').trim();
+  if(!name)return alert('Type a list name.');
+  if(S.lists.some(l=>String(l.name).toLowerCase()===name.toLowerCase()))return alert('A list with that name already exists.');
+  if(!S.ownerConfirmed)return alert('Wait for your username to be detected before creating a list.');
+  const owner=S.ownerName,generation=S.ownerDetectionGeneration,form=S.modal;
+  const button=form?.querySelector('#mlsave'),oldText=button?.textContent;
+  S.createListBusy=true;
+  if(button){button.disabled=true;button.textContent='Saving...'}
+  try{
+    const d=await api('/api/list/create','POST',{owner,name,color});
+    if(generation!==S.ownerDetectionGeneration)return;
+    applyPayload(d);
+    if(S.modal===form)closeModal();
+  }catch(e){
+    if(generation!==S.ownerDetectionGeneration)return;
+    if(e.status===409){alert(e.message||'The list could not be created. Please check its name and your list limit.')}
+    else showError('CREATE_LIST_FAILED',e.message);
+  }finally{
+    S.createListBusy=false;
+    if(button?.isConnected){button.disabled=false;button.textContent=oldText}
+  }
+}
+
 async function updateList(id,name,color){try{const d=await api('/api/list/update','POST',{owner:S.ownerName,id,name,color});applyPayload(d);closeModal()}catch(e){showError('UPDATE_LIST_FAILED',e.message)}}
 async function deleteList(id){const l=listById(id);if(!l||l.is_default)return;if(!confirm('Delete list '+l.name+' and every entry inside it?'))return;try{const d=await api('/api/list/delete','POST',{owner:S.ownerName,id});applyPayload(d)}catch(e){showError('DELETE_LIST_FAILED',e.message)}}
 
@@ -1153,9 +1180,81 @@ async function openDeveloperMode(){
     m.querySelector('#mdevclose').onclick=closeModal;
   }catch(e){alert('Developer mode failed: '+e.message)}
 }
-function registerMenu(){GM_registerMenuCommand('Marklister: 새로고침',()=>bootstrap(true));GM_registerMenuCommand('Marklister: 사용자 인식 초기화',restartOwnerDetection);GM_registerMenuCommand('Marklister: 개발자 모드',openDeveloperMode);GM_registerMenuCommand('Marklister: 개발자 페이지',()=>{const u=DEFAULT_SERVER_URL+'/admin';if(typeof GM_openInTab==='function')GM_openInTab(u,{active:true,insert:true});else window.open(u,'_blank')})}
+const UPDATE_SCRIPT_URL='https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js';
+const UPDATE_SNOOZE_KEY='marklister_update_snooze_v1';
+function compareReleaseVersions(a,b){
+  const parse=v=>/^\d+(?:\.\d+){1,3}$/.test(v)?v.split('.').map(Number):null;
+  const x=parse(a),y=parse(b);
+  if(!x||!y)return null;
+  for(let i=0;i<Math.max(x.length,y.length);i++){
+    const d=(x[i]||0)-(y[i]||0);if(d)return Math.sign(d);
+  }
+  return 0;
+}
+function releaseVersionFromScript(text){
+  const block=/\/\/ ==UserScript==([\s\S]*?)\/\/ ==\/UserScript==/.exec(String(text||''));
+  if(!block)return null;
+  const namespace=/^\/\/\s*@namespace\s+([^\r\n]+)/m.exec(block[1]);
+  if(namespace?.[1].trim()!=='marklister.florr.public')return null;
+  const v=/^\/\/\s*@version\s+([^\r\n]+)/m.exec(block[1])?.[1].trim();
+  return v&&compareReleaseVersions(v,v)===0?v:null;
+}
+function fetchReleaseVersion(){
+  // Public GitHub request: never attach the Marklister client token.
+  return new Promise((resolve,reject)=>GM_xmlhttpRequest({
+    method:'GET',url:UPDATE_SCRIPT_URL+'?check='+Date.now(),anonymous:true,timeout:12000,
+    onload:r=>{
+      if(r.status!==200)return reject(new Error('Update server returned HTTP '+r.status));
+      const version=releaseVersionFromScript(r.responseText);
+      if(!version)return reject(new Error('Update version could not be verified.'));
+      resolve(version);
+    },
+    onerror:()=>reject(new Error('Update check failed.')),
+    ontimeout:()=>reject(new Error('Update check timed out.'))
+  }));
+}
+function showUpdateNotice(version){
+  if(document.getElementById('ml-update-notice'))return;
+  const box=document.createElement('div');box.id='ml-update-notice';
+  box.setAttribute('role','dialog');box.setAttribute('aria-label','Marklister update');
+  box.style.cssText='position:fixed;right:20px;bottom:20px;z-index:2147483647;width:290px;max-width:calc(100vw - 40px);box-sizing:border-box;padding:18px;background:#373237;color:#fff;border:2px solid #a88bd9;border-radius:10px;box-shadow:0 8px 30px #0008;font:14px Arial,sans-serif;line-height:1.5;pointer-events:auto';
+  const title=document.createElement('strong');title.textContent='Marklister update available';
+  const message=document.createElement('p');message.textContent='v'+VERSION.split('-')[0]+' → v'+version+' is available.';
+  const install=document.createElement('button');install.textContent='Open update';
+  const later=document.createElement('button');later.textContent='Remind me tomorrow';
+  for(const button of [install,later])button.style.cssText='cursor:pointer;padding:7px 10px;margin:4px 6px 0 0;border:0;border-radius:5px';
+  const dismiss=()=>{GM_setValue(UPDATE_SNOOZE_KEY,{version,until:Date.now()+86400000});box.remove()};
+  install.onclick=()=>{
+    if(typeof GM_openInTab==='function')GM_openInTab(UPDATE_SCRIPT_URL,{active:true,insert:true});
+    else window.open(UPDATE_SCRIPT_URL,'_blank','noopener');
+    dismiss();
+  };
+  later.onclick=dismiss;
+  for(const type of ['pointerdown','pointerup','mousedown','mouseup','click','wheel','keydown'])box.addEventListener(type,e=>e.stopPropagation());
+  box.append(title,message,install,later);document.documentElement.appendChild(box);
+}
+async function checkForUpdates(manual=false){
+  if(S.updateCheckBusy)return;
+  S.updateCheckBusy=true;
+  try{
+    const version=await fetchReleaseVersion();
+    if(compareReleaseVersions(version,VERSION.split('-')[0])!==1){
+      if(manual)alert('Marklister is up to date.');return;
+    }
+    const snooze=GM_getValue(UPDATE_SNOOZE_KEY,null);
+    if(!manual&&snooze?.version===version&&Date.now()<snooze.until)return;
+    showUpdateNotice(version);
+  }catch(e){if(manual)alert(e.message);else console.warn('[Marklister] update check:',e.message)}
+  finally{S.updateCheckBusy=false}
+}
+function scheduleUpdateChecks(){
+  setTimeout(()=>checkForUpdates(false),10000);
+  setInterval(()=>{if(!document.hidden)checkForUpdates(false)},21600000);
+}
+
+function registerMenu(){GM_registerMenuCommand('Marklister: 업데이트 확인',()=>checkForUpdates(true));GM_registerMenuCommand('Marklister: 새로고침',()=>bootstrap(true));GM_registerMenuCommand('Marklister: 사용자 인식 초기화',restartOwnerDetection);GM_registerMenuCommand('Marklister: 개발자 모드',openDeveloperMode);GM_registerMenuCommand('Marklister: 개발자 페이지',()=>{const u=DEFAULT_SERVER_URL+'/admin';if(typeof GM_openInTab==='function')GM_openInTab(u,{active:true,insert:true});else window.open(u,'_blank')})}
 
 function installGlobalErrorCapture(){const ours=v=>{const s=String(v||'').toLowerCase();return s.includes('marklister')||s.includes('userscript')};window.addEventListener('error',e=>{const st=e?.error?.stack||e?.filename||'';if(e?.error&&ours(st))showError('UNCAUGHT_ERROR',e.error.message||e.message,{stage:'UNCAUGHT',error:e.error,stack:e.error.stack||''})});window.addEventListener('unhandledrejection',e=>{const r=e.reason,st=r?.stack||'';if(ours(st))showError('UNHANDLED_REJECTION',r?.message||String(r),{stage:'UNHANDLED_REJECTION',error:r instanceof Error?r:null,stack:st})})}
-function start(){S.nameDetectActive=false;S.nameDetectStartedAt=0;installFlorrkitHitboxBridge();createUI();installInputShield();installCanvasCapture();installKeys();installGlobalErrorCapture();registerMenu();refreshBugWords();refreshActivity(true)}
+function start(){S.nameDetectActive=false;S.nameDetectStartedAt=0;installFlorrkitHitboxBridge();createUI();installInputShield();installCanvasCapture();installKeys();installGlobalErrorCapture();registerMenu();scheduleUpdateChecks();refreshBugWords();refreshActivity(true)}
 start();
 })();
