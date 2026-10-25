@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Marklister for florr.io
 // @namespace    marklister.florr.public
-// @version      1.5.6
+// @version      1.5.7
 // @updateURL    https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
 // @downloadURL  https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
-// @description  Marklister v1.5.6 internal-state gate: multiple custom lists, list colors, move, persistent display selection, safer UI cancellation, error reports, Bug Words, and low-load tracking.
+// @description  Marklister v1.5.7 internal-state gate: multiple custom lists, list colors, move, persistent display selection, safer UI cancellation, error reports, Bug Words, and low-load tracking.
 // @match        https://florr.io/*
 // @match        https://*.florr.io/*
 // @run-at       document-start
@@ -22,8 +22,8 @@
 (() => {
 'use strict';
 const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-const VERSION = '1.5.6-test';
-const BUILD = 'list-submit-lock-and-update-notice';
+const VERSION = '1.5.7-test';
+const BUILD = 'squad-invite';
 const DEFAULT_SERVER_URL = 'https://marklister-server.starcofan.workers.dev';
 const CLIENT_TOKEN_KEY = 'marklister_client_token_v1';
 const UI_STATE_KEY = 'marklister_ui_state_v1';
@@ -60,6 +60,7 @@ const ICON_COL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABFIAAARSCAYAAACD
 const S = {
   serverUrl: DEFAULT_SERVER_URL,
   clientToken: '',
+  inviteBusy: false,
   createListBusy: false,
   updateCheckBusy: false,
   ownerName: '', // detect fresh every page load; never trust stale owner saved by older buggy builds
@@ -1040,7 +1041,7 @@ async function deleteList(id){const l=listById(id);if(!l||l.is_default)return;if
 function createUI(){
   GM_addStyle(CSS);
   const root=document.createElement('div');root.id='ml-root';root.innerHTML=`
-  <div class="ml-panel ml-hidden" id="ml-panel"><div class="ml-head ml-drag" id="ml-head"><div class="ml-head-icons"><img class="ml-col" src="${ICON_COL}"><img class="ml-mark" src="${ICON_MARK}"></div><span class="ml-title ml-title-toggle" id="ml-title-full">Marklister</span><div class="ml-eye" id="ml-eye-full"></div></div><div class="ml-body"><div class="ml-owner-name waiting" id="ml-owner-name" role="button" tabindex="0" title="Click to detect your username again" style="cursor:pointer">User: Waiting for game...</div><button class="ml-mainbtn" id="ml-display">Display lister</button><div class="ml-short">Alt + D</div><button class="ml-mainbtn" id="ml-show">Show list</button><div class="ml-short">Alt + S</div><button class="ml-mainbtn" id="ml-add">Add lister</button><div class="ml-short">Alt + A</div><button class="ml-mainbtn" id="ml-newlist">Make New list</button><div class="ml-short">Alt + M</div><button class="ml-mainbtn" id="ml-help">Help</button><div class="ml-discord">Discord: Eclipsa1234</div><div class="ml-version">v${VERSION} test</div></div></div>
+  <div class="ml-panel ml-hidden" id="ml-panel"><div class="ml-head ml-drag" id="ml-head"><div class="ml-head-icons"><img class="ml-col" src="${ICON_COL}"><img class="ml-mark" src="${ICON_MARK}"></div><span class="ml-title ml-title-toggle" id="ml-title-full">Marklister</span><div class="ml-eye" id="ml-eye-full"></div></div><div class="ml-body"><div class="ml-owner-name waiting" id="ml-owner-name" role="button" tabindex="0" title="Click to detect your username again" style="cursor:pointer">User: Waiting for game...</div><button class="ml-mainbtn" id="ml-display">Display lister</button><div class="ml-short">Alt + D</div><button class="ml-mainbtn" id="ml-show">Show list</button><div class="ml-short">Alt + L</div><button class="ml-mainbtn" id="ml-add">Add lister</button><div class="ml-short">Alt + A</div><button class="ml-mainbtn" id="ml-newlist">Make New list</button><div class="ml-short">Alt + M</div><button class="ml-mainbtn" id="ml-invite">Invite squad</button><div class="ml-short">Alt + S</div><button class="ml-mainbtn" id="ml-help">Help</button><div class="ml-discord">Discord: Eclipsa1234</div><div class="ml-version">v${VERSION} test</div></div></div>
   <div class="ml-compact ml-drag" id="ml-compact"><img class="ml-mark" src="${ICON_MARK}"><span class="ml-title ml-title-toggle" id="ml-title-compact">Marklister</span><div class="ml-eye" id="ml-eye-compact"></div></div>
   <div class="ml-tiny ml-hidden ml-drag" id="ml-tiny"><img class="ml-mark" src="${ICON_MARK}"><div class="ml-eye" id="ml-eye-tiny"></div></div>
   <div class="ml-listpanel ml-hidden" id="ml-list"><div class="ml-list-handle"></div><div id="ml-list-body"></div></div>`;
@@ -1049,7 +1050,7 @@ function createUI(){
   const ownerLabel=root.querySelector('#ml-owner-name');
   ownerLabel.onclick=e=>{e.preventDefault();e.stopPropagation();restartOwnerDetection()};
   ownerLabel.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();restartOwnerDetection()}};
-  root.querySelector('#ml-display').onclick=e=>{e.preventDefault();e.stopPropagation();openSide('display')};root.querySelector('#ml-show').onclick=()=>openSide('show-lists');root.querySelector('#ml-add').onclick=openAddChoice;root.querySelector('#ml-newlist').onclick=openNewList;root.querySelector('#ml-help').onclick=openHelp;
+  root.querySelector('#ml-display').onclick=e=>{e.preventDefault();e.stopPropagation();openSide('display')};root.querySelector('#ml-show').onclick=()=>openSide('show-lists');root.querySelector('#ml-add').onclick=openAddChoice;root.querySelector('#ml-newlist').onclick=openNewList;root.querySelector('#ml-help').onclick=openHelp;root.querySelector('#ml-invite').onclick=openInviteSquad;
   installDrag(root.querySelector('#ml-head'));installDrag(root.querySelector('#ml-compact'));installDrag(root.querySelector('#ml-tiny'));applySavedPosition();renderUiState();
 }
 
@@ -1083,6 +1084,66 @@ function openEdit(item){const m=modal(`<div class="ml-modal-title">Edit</div><di
 function openMoveChooser(item,parent){let old=parent.querySelector('.ml-move-popup');if(old)return old.remove();const box=document.createElement('div');box.className='ml-move-popup';for(const l of S.lists){const r=document.createElement('div');r.className='ml-move-row';r.innerHTML=`<span>${esc(l.name)}</span><button class="ml-addbtn">Move</button>`;r.querySelector('button').disabled=Number(l.id)===Number(item.list_id);r.querySelector('button').onclick=()=>moveEntry(item.id,Number(l.id));box.appendChild(r)}parent.appendChild(box)}
 function openEditList(l){let color=l.color;const m=modal(`<div class="ml-modal-title">Edit list</div><div class="ml-field-label">list name</div><input id="mlname" class="ml-input" value="${esc(l.name)}"><div class="ml-field-label" style="margin-top:8px">color</div><div id="mlcolor" class="ml-color-box ${l.is_default?'locked':''}" style="background:${esc(color)}"></div><div style="margin-top:12px"><button id="mlsave" class="ml-addbtn">save</button></div>`);const c=m.querySelector('#mlcolor');if(!l.is_default)c.onclick=()=>chooseColor(color,v=>{color=v;c.style.background=v});m.querySelector('#mlsave').onclick=()=>updateList(l.id,m.querySelector('#mlname').value.trim(),l.is_default?DEFAULT_LIST_COLOR:color)}
 function openNewList(){let color=randomUnusedColor();const m=modal(`<div class="ml-modal-title">Make New list</div><div class="ml-field-label">list name</div><div class="ml-row"><input id="mlname" class="ml-input" autocomplete="off" spellcheck="false"><div id="mlcolor" class="ml-color-box" style="background:${color}"></div></div><div style="margin-top:12px"><button id="mlsave" class="ml-addbtn">save</button></div>`);const c=m.querySelector('#mlcolor');c.onclick=()=>chooseColor(color,v=>{color=v;c.style.background=v});m.querySelector('#mlsave').onclick=()=>createList(m.querySelector('#mlname').value.trim(),color);m.querySelector('#mlname').focus()}
+
+function openInviteSquad(){
+  if(S.inviteBusy)return;
+  const m=modal('<div class="ml-modal-title">Invite squad</div><div id="ml-invite-entries" style="max-height:55vh;overflow:auto"></div>');
+  const body=m.querySelector('#ml-invite-entries'),seen=new Set();
+  for(const list of S.lists){
+    const entries=S.entries.filter(e=>Number(e.list_id)===Number(list.id));
+    if(!entries.length)continue;
+    const title=document.createElement('div');title.className='ml-field-label';title.textContent=list.name;title.style.color=list.color;body.appendChild(title);
+    for(const entry of entries){
+      const key=String(entry.name).toLowerCase();if(seen.has(key))continue;seen.add(key);
+      const button=document.createElement('button');button.className='ml-mainbtn';button.textContent=entry.name;
+      button.title='Invite '+entry.name+' to your squad';button.onclick=()=>inviteSquad(entry.name);body.appendChild(button);
+    }
+  }
+  if(!seen.size){const empty=document.createElement('div');empty.className='ml-field-label';empty.textContent='No saved users. Add a user to a list first.';body.appendChild(empty)}
+}
+function sendChatEnter(target){
+  for(const type of ['keydown','keyup'])target.dispatchEvent(new PAGE.KeyboardEvent(type,{
+    key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true
+  }));
+}
+function activeGameTextInput(){
+  const el=document.activeElement;
+  if(!el?.matches?.('#textInputContainer input.textInput')||el.disabled)return null;
+  const rect=el.getBoundingClientRect();return rect.width>0&&rect.height>0?el:null;
+}
+async function inviteSquad(name){
+  if(S.inviteBusy)return;
+  name=String(name||'').trim();
+  if(!name||/[\r\n\u0000-\u001f\u007f]/.test(name))return alert('Invalid username.');
+  if(!S.ownerConfirmed)return alert('Enter the game and wait for your username to be detected.');
+  const M=moduleHeap();
+  try{if(!M?.calledRun||M._cp6_browser_quit_confirmation?.()!==1)return alert('Enter the game before inviting a user.')}catch{return alert('Could not confirm the game state. Please try again in game.')}
+  if(activeGameTextInput())return alert('Close the current game text input before inviting a user.');
+  const canvas=document.getElementById('canvas');if(!canvas)return;
+  S.inviteBusy=true;
+  const generation=S.ownerDetectionGeneration;
+  closeModal();
+  try{
+    document.activeElement?.blur?.();canvas.focus();sendChatEnter(canvas);
+    let input=null;const started=performance.now();
+    while(performance.now()-started<1800){
+      await new Promise(r=>setTimeout(r,50));
+      if(generation!==S.ownerDetectionGeneration)return;
+      input=activeGameTextInput();if(input)break;
+    }
+    if(!input)throw new Error('Could not open game chat. No invitation command was sent.');
+    if(input.value)throw new Error('The game input contains text. It was left unchanged; no invitation was sent.');
+    const command='/squad-invite '+name;
+    if(input.maxLength>=0&&command.length>input.maxLength)throw new Error('The invitation command exceeds the chat length limit.');
+    const setter=Object.getOwnPropertyDescriptor(PAGE.HTMLInputElement.prototype,'value').set;
+    setter.call(input,command);input.dispatchEvent(new PAGE.Event('input',{bubbles:true}));
+    // Allow the game's input polling to observe the command before Enter.
+    await new Promise(r=>setTimeout(r,100));
+    if(generation!==S.ownerDetectionGeneration||activeGameTextInput()!==input||input.value!==command)throw new Error('Chat changed before sending. Please check the chat input.');
+    sendChatEnter(input);
+  }catch(e){alert(e.message)}
+  finally{S.inviteBusy=false}
+}
 
 function openHelp(){const m=modal('<div class="ml-modal-title">Help</div><div style="font-weight:700;line-height:1.5">Display lister: marklisted users are highlighted.<br>Show list: view / edit / delete your list.<br>Add Marklist: type a name or click a visible player.</div><div class="ml-row" style="margin-top:10px"><button id="madmin" class="ml-cancel">Developer page</button><button id="mclose" class="ml-cancel">Close</button></div>');m.querySelector('#madmin').onclick=()=>{const u=S.serverUrl.replace(/\/$/,'')+'/admin';if(typeof GM_openInTab==='function')GM_openInTab(u,{active:true,insert:true});else window.open(u,'_blank')};m.querySelector('#mclose').onclick=closeModal}
 
@@ -1168,7 +1229,7 @@ function installInputShield(){
   document.addEventListener('pointerdown',e=>{if(e.target instanceof Element&&e.target.closest('.ml-modal-bg'))e.stopPropagation()},false);
   document.addEventListener('click',e=>{if(e.target instanceof Element&&e.target.closest('.ml-modal-bg'))e.stopPropagation()},false);
 }
-function installKeys(){window.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();cancelCurrentTask();return}if(editFocusedInputFromKey(e)){e.preventDefault();e.stopImmediatePropagation();return}if(e.target instanceof Element&&e.target.closest('.ml-input,.ml-textarea'))return;if(!e.altKey||e.ctrlKey||e.metaKey)return;const k=e.key.toLowerCase();if(k==='d'){e.preventDefault();openSide('display')}else if(k==='s'){e.preventDefault();openSide('show-lists')}else if(k==='a'){e.preventDefault();openAddChoice()}else if(k==='m'){e.preventDefault();openNewList()}},true)}
+function installKeys(){window.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();cancelCurrentTask();return}if(editFocusedInputFromKey(e)){e.preventDefault();e.stopImmediatePropagation();return}if(e.target instanceof Element&&e.target.closest('.ml-input,.ml-textarea'))return;if(!e.altKey||e.ctrlKey||e.metaKey)return;const k=e.key.toLowerCase();if(k==='d'){e.preventDefault();openSide('display')}else if(k==='s'){e.preventDefault();e.stopImmediatePropagation();if(!e.repeat)openInviteSquad()}else if(k==='l'){e.preventDefault();openSide('show-lists')}else if(k==='a'){e.preventDefault();openAddChoice()}else if(k==='m'){e.preventDefault();openNewList()}},true)}
 
 async function openDeveloperMode(){
   const pw=prompt('Developer password');
