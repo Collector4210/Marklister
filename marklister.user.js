@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Marklister for florr.io
 // @namespace    marklister.florr.public
-// @version      1.5.7
+// @version      1.5.8
 // @updateURL    https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
 // @downloadURL  https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
-// @description  Marklister v1.5.7 internal-state gate: multiple custom lists, list colors, move, persistent display selection, safer UI cancellation, error reports, Bug Words, and low-load tracking.
+// @description  Marklister v1.5.8 internal-state gate: multiple custom lists, list colors, move, persistent display selection, safer UI cancellation, error reports, Bug Words, and low-load tracking.
 // @match        https://florr.io/*
 // @match        https://*.florr.io/*
 // @run-at       document-start
@@ -22,8 +22,8 @@
 (() => {
 'use strict';
 const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-const VERSION = '1.5.7-test';
-const BUILD = 'squad-invite';
+const VERSION = '1.5.8-test';
+const BUILD = 'ui-scroll-and-default-list-order';
 const DEFAULT_SERVER_URL = 'https://marklister-server.starcofan.workers.dev';
 const CLIENT_TOKEN_KEY = 'marklister_client_token_v1';
 const UI_STATE_KEY = 'marklister_ui_state_v1';
@@ -145,7 +145,7 @@ function defaultList(){return S.lists.find(x=>x.is_default)||S.lists[0]||null}
 function listById(id){return S.lists.find(x=>Number(x.id)===Number(id))||null}
 function randomUnusedColor(){const palette=['#ff1a1a','#13aee8','#fff119','#7ee842','#e865d9','#a470ff','#ff8c22','#25d7be','#f45d75','#67a6ff','#d0e64a','#ffba65'];const used=new Set(S.lists.map(x=>String(x.color||'').toLowerCase()));const free=palette.filter(x=>!used.has(x.toLowerCase())&&x.toLowerCase()!==DEFAULT_LIST_COLOR);return free.length?free[Math.floor(Math.random()*free.length)]:('#'+Math.floor(Math.random()*0xffffff).toString(16).padStart(6,'0'))}
 function rebuildDisplayMap(){const chosen=S.displayAll?new Set(S.lists.map(x=>Number(x.id))):S.displayedListIds;S.listMap=new Map();for(const e of S.entries){if(chosen.has(Number(e.list_id)))S.listMap.set(String(e.name||'').toLowerCase(),e)}S.list=[...S.listMap.values()];S.displayEnabled=S.listMap.size>0;saveV15State();refreshActivity(true)}
-function applyPayload(d){if(!S.ownerConfirmed||(d.user&&d.user!==S.ownerName))return;S.lists=Array.isArray(d.lists)?d.lists:[];S.entries=Array.isArray(d.entries)?d.entries:(Array.isArray(d.items)?d.items:[]);const valid=new Set(S.lists.map(x=>Number(x.id)));S.displayedListIds=new Set([...S.displayedListIds].filter(id=>valid.has(Number(id))));if(!S.displayAll&&S.displayedListIds.size===0){const def=defaultList();if(def)S.displayedListIds.add(Number(def.id))}if(!S.addListId||!valid.has(Number(S.addListId))){const def=defaultList();S.addListId=def?Number(def.id):null}rebuildDisplayMap();if(S.uiMode==='full'&&S.sideMode)renderSidePanel()}
+function applyPayload(d){if(!S.ownerConfirmed||(d.user&&d.user!==S.ownerName))return;S.lists=Array.isArray(d.lists)?[...d.lists].sort((a,b)=>Number(!!a.is_default)-Number(!!b.is_default)):[];S.entries=Array.isArray(d.entries)?d.entries:(Array.isArray(d.items)?d.items:[]);const valid=new Set(S.lists.map(x=>Number(x.id)));S.displayedListIds=new Set([...S.displayedListIds].filter(id=>valid.has(Number(id))));if(!S.displayAll&&S.displayedListIds.size===0){const def=defaultList();if(def)S.displayedListIds.add(Number(def.id))}if(!S.addListId||!valid.has(Number(S.addListId))){const def=defaultList();S.addListId=def?Number(def.id):null}rebuildDisplayMap();if(S.uiMode==='full'&&S.sideMode)renderSidePanel()}
 function selectedColorForName(name){const e=S.listMap.get(String(name||'').toLowerCase());return e?.list_color||listById(e?.list_id)?.color||DEFAULT_LIST_COLOR}
 function hexToRgba(hex,a){const m=/^#([0-9a-f]{6})$/i.exec(String(hex||''));if(!m)return `rgba(255,26,26,${a})`;const n=parseInt(m[1],16),r=(n>>16)&255,g=(n>>8)&255,b=n&255;return `rgba(${r},${g},${b},${a})`}
 function closeColorPalette(){
@@ -1217,6 +1217,14 @@ function drawOverlay(){if(!S.overlay)return;const active=S.selectionMode||(S.dis
 function overlayLoop(){scheduleOverlayLoop(false)}
 
 function installInputShield(){
+  // Intercept before the game's window wheel listener. Keep the browser's
+  // default scrolling action so native scroll containers remain usable.
+  window.addEventListener('wheel',e=>{
+    const target=e.target instanceof Element?e.target:e.target?.parentElement;
+    if(target?.closest('#ml-root,.ml-modal-bg,.ml-color-palette-bg,.ml-error-bg,#ml-update-notice')){
+      e.stopImmediatePropagation();
+    }
+  },{capture:true,passive:true});
   const stopBubble=e=>e.stopPropagation();
   const bindSurface=el=>{
     if(!el)return;
