@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Marklister for florr.io
 // @namespace    marklister.florr.public
-// @version      1.5.8
+// @version      1.5.9
 // @updateURL    https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
 // @downloadURL  https://raw.githubusercontent.com/Collector4210/Marklister/main/marklister.user.js
-// @description  Marklister v1.5.8 internal-state gate: multiple custom lists, list colors, move, persistent display selection, safer UI cancellation, error reports, Bug Words, and low-load tracking.
+// @description  Marklister v1.5.9 internal-state gate: multiple custom lists, list colors, move, persistent display selection, safer UI cancellation, error reports, Bug Words, and low-load tracking.
 // @match        https://florr.io/*
 // @match        https://*.florr.io/*
 // @run-at       document-start
@@ -22,8 +22,8 @@
 (() => {
 'use strict';
 const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-const VERSION = '1.5.8-test';
-const BUILD = 'ui-scroll-and-default-list-order';
+const VERSION = '1.5.9-test';
+const BUILD = 'popup-mouse-tracking-and-update-style';
 const DEFAULT_SERVER_URL = 'https://marklister-server.starcofan.workers.dev';
 const CLIENT_TOKEN_KEY = 'marklister_client_token_v1';
 const UI_STATE_KEY = 'marklister_ui_state_v1';
@@ -1217,6 +1217,17 @@ function drawOverlay(){if(!S.overlay)return;const active=S.selectionMode||(S.dis
 function overlayLoop(){scheduleOverlayLoop(false)}
 
 function installInputShield(){
+  // UI covers the canvas; relay movement only, never UI clicks or wheel input.
+  window.addEventListener('mousemove',e=>{
+    const target=e.target instanceof Element?e.target:e.target?.parentElement;
+    if(!target?.closest('#ml-root,.ml-modal-bg,.ml-color-palette-bg,.ml-error-bg,#ml-update-notice'))return;
+    const canvas=document.getElementById('canvas');if(!canvas)return;
+    canvas.dispatchEvent(new PAGE.MouseEvent('mousemove',{
+      bubbles:true,cancelable:true,view:PAGE,clientX:e.clientX,clientY:e.clientY,
+      screenX:e.screenX,screenY:e.screenY,movementX:e.movementX,movementY:e.movementY,
+      buttons:0,button:0
+    }));
+  },{capture:true,passive:true});
   // Intercept before the game's window wheel listener. Keep the browser's
   // default scrolling action so native scroll containers remain usable.
   window.addEventListener('wheel',e=>{
@@ -1286,21 +1297,26 @@ function showUpdateNotice(version){
   if(document.getElementById('ml-update-notice'))return;
   const box=document.createElement('div');box.id='ml-update-notice';
   box.setAttribute('role','dialog');box.setAttribute('aria-label','Marklister update');
-  box.style.cssText='position:fixed;right:20px;bottom:20px;z-index:2147483647;width:290px;max-width:calc(100vw - 40px);box-sizing:border-box;padding:18px;background:#373237;color:#fff;border:2px solid #a88bd9;border-radius:10px;box-shadow:0 8px 30px #0008;font:14px Arial,sans-serif;line-height:1.5;pointer-events:auto';
-  const title=document.createElement('strong');title.textContent='Marklister update available';
+  box.style.cssText='position:fixed;right:20px;bottom:20px;z-index:2147483647;width:290px;max-width:calc(100vw - 40px);box-sizing:border-box;padding:18px;background:#777174;color:#fff;border:3px solid #3d3b3d;border-radius:9px;box-shadow:0 6px 18px #0005;font:700 14px Arial,sans-serif;line-height:1.5;pointer-events:auto';
+  const title=document.createElement('strong');title.textContent='Marklister update';title.className='ml-modal-title';title.style.display='block';
   const message=document.createElement('p');message.textContent='v'+VERSION.split('-')[0]+' → v'+version+' is available.';
   const install=document.createElement('button');install.textContent='Open update';
   const later=document.createElement('button');later.textContent='Remind me tomorrow';
-  for(const button of [install,later])button.style.cssText='cursor:pointer;padding:7px 10px;margin:4px 6px 0 0;border:0;border-radius:5px';
+  install.className='ml-mainbtn';install.style.fontSize='18px';later.className='ml-cancel';
+  const refreshNote=document.createElement('p');refreshNote.textContent='After installing the update, refresh florr.io to apply it.';refreshNote.style.color='#eee';
+  const reload=document.createElement('button');reload.className='ml-mainbtn';reload.style.cssText='font-size:18px;margin-top:8px;display:none';reload.textContent='Refresh florr.io';reload.onclick=()=>location.reload();
   const dismiss=()=>{GM_setValue(UPDATE_SNOOZE_KEY,{version,until:Date.now()+86400000});box.remove()};
   install.onclick=()=>{
     if(typeof GM_openInTab==='function')GM_openInTab(UPDATE_SCRIPT_URL,{active:true,insert:true});
     else window.open(UPDATE_SCRIPT_URL,'_blank','noopener');
-    dismiss();
+    GM_setValue(UPDATE_SNOOZE_KEY,{version,until:Date.now()+86400000});
+    message.textContent='The update page is open. Finish installing there, then refresh this game tab.';
+    reload.style.display='block';
+    later.textContent='Close';
   };
   later.onclick=dismiss;
   for(const type of ['pointerdown','pointerup','mousedown','mouseup','click','wheel','keydown'])box.addEventListener(type,e=>e.stopPropagation());
-  box.append(title,message,install,later);document.documentElement.appendChild(box);
+  box.append(title,message,refreshNote,install,reload,later);document.documentElement.appendChild(box);
 }
 async function checkForUpdates(manual=false){
   if(S.updateCheckBusy)return;
